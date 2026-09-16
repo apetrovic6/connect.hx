@@ -1,0 +1,33 @@
+# The public ConnectRPC demo service. Useful as a live target that needs no
+# local server, and it has server reflection enabled, so `buf curl` works
+# against it with no .proto files present.
+#
+# Verified reachable 2026-09-16.
+
+@base = https://demo.connectrpc.com
+@eliza = {{base}}/connectrpc.eliza.v1.ElizaService
+
+### unary -- longhand
+POST {{eliza}}/Say
+Content-Type: application/json
+Connect-Protocol-Version: 1
+
+{"sentence": "hello"}
+
+### unary -- shorthand (milestone 2; not yet parsed)
+>> connectrpc.eliza.v1.ElizaService/Say
+{"sentence": "hello again"}
+
+### an error: no such method, so the router 404s before Connect sees it
+POST {{eliza}}/NoSuchMethod
+Content-Type: application/json
+Connect-Protocol-Version: 1
+
+{}
+
+### server streaming -- unreadable through curl, decoded by `buf curl`
+POST {{eliza}}/Introduce
+Content-Type: application/json
+Connect-Protocol-Version: 1
+
+{"name": "ada"}

@@ -1,0 +1,73 @@
+# connect.hx
+
+A [ConnectRPC](https://connectrpc.com) client for the [Helix](https://helix-editor.com)
+editor: write requests in a buffer, execute them against a running service, read
+the response in a split.
+
+> **Status: step 0.** The build, the cog contract and the pure request
+> construction exist and are tested. No request is executed from the editor
+> yet. See [DESIGN.md](./DESIGN.md) for the plan and the reasoning behind it.
+
+Requires Helix with the experimental Steel plugin system
+([mattwparas/helix, `steel-event-system`](https://github.com/mattwparas/helix/tree/steel-event-system)).
+
+## Dependencies
+
+- `curl` -- the default executor, and the only hard requirement.
+- `buf` -- optional. Enables the schema-aware executor: request validation,
+  decoded streaming responses, readable error details.
+
+## Development
+
+```sh
+nix develop          # steel, steel-language-server, buf, curl, jq, protobuf, grpcurl
+steel tests/request-tests.scm
+nix build            # also runs the tests
+nix fmt
+```
+
+The dev shell points `STEEL_HOME` at `.dev/steel-home`, with this checkout
+symlinked in as the `connect.hx` cog alongside its dependencies, so `require`
+resolves at the prompt exactly as it does inside Helix.
+
+## Using it from a nix config
+
+The package carries the `cogName` and `pluginDependencies` passthru attributes
+that `helix-plugins-nix` consumers expect, so it drops into an existing plugin
+list:
+
+```nix
+# flake.nix
+inputs.connect-hx.url = "github:apetrovic/connect.hx";
+
+# wherever the plugin list lives
+selectPlugins = p: [
+  p.oil
+  inputs.connect-hx.packages.${system}.default
+];
+```
+
+Then require it from `init.scm` at top level -- **not** from inside another
+module, or the commands will not be registered:
+
+```scheme
+(require "connect.hx/connect-client.scm")
+```
+
+Verify with `:connect-doctor`, which reports which executors are on PATH.
+
+## Commands
+
+| Command | Status |
+| --- | --- |
+| `:connect-doctor` | implemented -- reports available executors |
+
+## Licence
+
+MIT. See [LICENSE](./LICENSE).
+
+The `.http` syntax support builds on [http2curl](https://github.com/waddie/http2curl.scm)
+and process execution on [run-command](https://github.com/waddie/run-command.scm),
+both MIT, both by Tom Waddington. The design owes a lot to
+[http.hx](https://github.com/waddie/http.hx), which is AGPL-3.0-or-later; no
+code from it is used here.

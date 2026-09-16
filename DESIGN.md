@@ -1,0 +1,379 @@
+# connect.hx -- design
+
+A ConnectRPC client for the Helix editor: write requests in a buffer, execute
+them against a running service, read the response in a split. The `.http`-file
+workflow from VS Code's REST Client and the JetBrains HTTP Client, specialised
+for Connect.
+
+Status: **step 0**. The nix plumbing, the cog contract and the pure request
+construction exist and are tested; no request has been sent from inside the
+editor yet. Everything below the "Architecture" heading is a plan, not a
+description of working code.
+
+Last updated 2026-09-16.
+
+---
+
+## 1. Goals
+
+- Execute a Connect unary call from a buffer and see the response, without
+  leaving the editor.
+- Keep plain HTTP working in the same file, because real services are never
+  purely RPC -- there is always a `/healthz` or an OAuth token endpoint.
+- Use the protobuf schema where it pays for itself, and degrade cleanly to a
+  dumb HTTP client where it does not.
+
+### Non-goals
+
+- Being an LSP. Field-level completion is explicitly out of scope for the
+  plugin; see §5.
+- Supporting the gRPC or gRPC-Web protocols directly. `buf curl` speaks both
+  if it ever matters, but the request format here is modelled on Connect.
+- Replacing `buf curl` or `grpcurl` as a CLI. This is an editor front end.
+
+---
+
+## 2. Why ConnectRPC is the easy target
+
+A Connect **unary** call over JSON is an ordinary HTTP POST. This is the whole
+protocol as far as this plugin is concerned:
+
+```
+POST /<fully.qualified.Service>/<Method> HTTP/1.1
+Content-Type: application/json
+Connect-Protocol-Version: 1
+
+<the request message, as bare JSON>
+```
+
+The response is the bare message as JSON. There is no framing, no HTTP/2
+requirement and no protobuf on the wire. Verified against the public demo
+service on 2026-09-16:
+
+```console
+$ curl -s -X POST https://demo.connectrpc.com/connectrpc.eliza.v1.ElizaService/Say \
+    -H 'Content-Type: application/json' -H 'Connect-Protocol-Version: 1' \
+    -d '{"sentence":"hello"}'
+{"sentence":"Hello there...how are you today?"}
+```
+
+That single fact is what makes the project small: `curl` is a sufficient
+transport for the common case, and the interesting work is ergonomics and
+schema rather than protocol implementation.
+
+### Errors
+
+A Connect error is a non-2xx response whose body is:
+
+```json
+{"code": "not_found", "message": "...", "details": [...]}
+```
+
+Two consequences, both load-bearing:
+
+- **The executor must not pass `curl --fail`.** With `--fail`, curl exits
+  non-zero and discards the body -- exactly the body that explains the
+  failure. `tests/request-tests.scm` asserts the flag is absent so nobody adds
+  it later as an "improvement".
+- **The renderer needs the HTTP status**, hence `curl -i`. Without the status
+  line, an error body is indistinguishable from a successful response that
+  happens to have a `code` field.
+
+`details[]` entries are `Any`-packed protobuf messages -- a type URL plus
+base64. They are opaque without the schema. See §5.
+
+### Streaming
+
+Non-unary methods use the Connect streaming framing: each message is prefixed
+by 5 bytes (1 flag byte, then a 4-byte big-endian length), with content type
+`application/connect+json`. `curl` will dump this raw and it is unreadable.
+`buf curl` decodes it. This is the strongest single argument for the
+schema-aware executor, and the reason the executor is pluggable from day one.
+
+---
+
+## 3. Platform capabilities
+
+Verified against steel 0.8.2 and the `mattwparas/helix` `steel-event-system`
+fork on 2026-09-16, by probing the interpreter and reading the generated cogs
+in `$STEEL_HOME/cogs/helix`. Recorded here because these were the open
+feasibility questions, and the answers determine the architecture.
+
+### Steel can do the work
+
+| Need | Primitive | Notes |
+| --- | --- | --- |
+| Spawn a process | `command`, `spawn-process` | builtins, no `require`; `spawn-process` returns `(Ok ChildProcess)` |
+| Capture output | `set-piped-stdout!`, `wait->stdout` | without the pipe call, output goes to the terminal and the capture is empty |
+| Avoid pipe deadlock | `spawn-native-thread`, `thread-join!` | drain stdout and stderr concurrently |
+| JSON | `string->jsexpr`, `value->jsexpr-string` | builtin |
+| Timers | `enqueue-thread-local-callback-with-delay` | in `helix/misc.scm` |
+| Async | `await-callback`, `helix-await-callback` | in `helix/misc.scm` |
+| Fuzzy matching | `fuzzy-match` | in `helix/misc.scm`; enough to build a picker |
+| Custom UI | `new-component!`, `push-component!` | in `helix/components.scm` |
+| Inline annotation | `add-inlay-hint`, `remove-inlay-hint` | in `helix/misc.scm` |
+| Talk to an LSP | `send-lsp-command`, `send-lsp-notification` | in `helix/misc.scm` |
+
+`run-command` (MIT, a dependency) already wraps the first three correctly,
+including a `/bin/sh` watchdog for timeouts -- necessary because Steel's `kill`
+takes the child, SIGKILLs it and drops the handle without reaping, leaving a
+zombie with no exposed PID. Do not reimplement this.
+
+### Two constraints that shape the design
+
+**Numbers lose their type through JSON.** `string->jsexpr` parses `[1,2]` to
+`(1.0 2.0)`. protojson encodes `int64`/`uint64` as strings so those survive,
+but an `int32` round-tripped through parse-then-serialise becomes `1.0`.
+Therefore: **response bodies are handled as text** for display, and parsed only
+when a specific field must be extracted (request chaining). Never re-serialise
+a whole response and present it as what the server said.
+
+**Helix has no completion-provider hook.** `helix/static.scm` exposes
+`completion` only as "invoke the popup", and that popup is fed by LSP. A Steel
+plugin cannot contribute completion items. This is the single most important
+constraint on the project and §5 is built around it.
+
+---
+
+## 4. Architecture
+
+Three layers, deliberately split so the testable part has no editor
+dependency:
+
+```
+  .connect buffer
+        |
+        v
+  [ parser ]          connect-request.scm  -- pure, unit-tested
+        |             a request block -> {url, headers, body, method-ref}
+        v
+  [ executor ]        curl  |  buf curl    -- pluggable, selected per request
+        |             argv construction is pure; spawning is not
+        v
+  [ renderer ]        connect-client.scm   -- scratch buffer, status line
+```
+
+- `connect-request.scm` -- pure functions over strings and hashes. No helix
+  require, so `steel tests/*.scm` runs it in the nix sandbox where no editor
+  exists. The nix build gates on these tests (`doSteelCheck = true`).
+- `connect-client.scm` -- everything that touches the editor or spawns a
+  process. Cannot run outside helix.
+
+The split is not ceremony: it is the only way to have a test suite at all,
+since nothing that requires `helix/*` can be loaded by a bare `steel`.
+
+### Command registration
+
+Helix builds its typed command list from the globals present after startup.
+A name only becomes `:connect-…` if it is `provide`d **and** the module is
+required from `init.scm` at top level. Requiring it from inside another module
+makes the bindings module-local and the commands silently vanish. The oil
+wrapper in the magos config documents this failure mode at length.
+
+---
+
+## 5. Schema awareness
+
+The schema is a **FileDescriptorSet** -- the compiled form of the `.proto`
+files, carrying every service, method, message, field (name, number, type,
+cardinality, oneof, enum values) and doc comment. Sources, in order of
+convenience:
+
+1. **Server reflection.** `buf curl` uses it by default when `--schema` is
+   omitted. Works against any Connect server mounting `grpcreflect`.
+2. `buf build -o desc.binpb` (or `--format=json`, which `string->jsexpr` can
+   read directly -- so descriptors are reachable from Steel with no native
+   code).
+3. The BSR, for a module that is published.
+
+### What it buys, ranked by value per unit of effort
+
+1. **Request scaffolding.** Pick a method, get a skeleton body with every
+   field at the right nesting and the right type. Turns "what does
+   `CreateUser` take?" from a context switch into a keystroke. Needs no hook
+   Helix lacks -- it is text insertion. **Build this first.**
+2. **Method discovery.** A picker over `pkg.Service/Method` that inserts the
+   skeleton. `buf curl --list-methods <url>` supplies the data with no
+   descriptor parsing at all; `fuzzy-match` plus `new-component!` supplies the
+   UI. Verified working against the demo service.
+3. **Absent vs. zero in responses.** protojson **omits default-valued
+   fields** -- a `false`, a `0`, an empty string simply do not appear. Raw JSON
+   cannot distinguish "unset" from "set to zero"; with the descriptor the
+   renderer can show the full message shape. A genuine daily papercut that no
+   plain `.http` client can fix.
+4. **Pre-send validation.** This matters more than it first appears. A typo'd
+   field is **silently ignored** by the server:
+
+   ```console
+   $ curl ... -d '{"nope":1}'        # -> HTTP 200, field discarded
+   $ buf curl ... -d '{"sentance":"hi"}'
+   Failure: json unmarshal: proto: (line 1:2): unknown field "sentance"
+   ```
+
+   Raw curl gives a green result for a request that did not do what was
+   written. `buf curl` catches it client-side, for free.
+5. **Error `details` decoding.** Turns the `Any`-packed blobs into readable
+   messages. Worth it only if the services actually use rich errors.
+6. **Hover docs.** Proto comments ride along in the descriptor set. Needs a
+   custom component or an LSP.
+7. **Field completion while typing.** The demo-friendly feature and the
+   expensive one, blocked by the missing completion hook (§3). Options: build
+   a bespoke overlay (real work, will not feel native, fights Helix's own
+   completion), or write an actual `.connect` LSP server (the correct answer,
+   gets completion + diagnostics + hover at once -- but it is a separate
+   binary and a separate project). **Deferred indefinitely**; item 1 covers
+   most of the need.
+
+Items 1-4 are the plan. Items 5-7 are explicitly parked.
+
+---
+
+## 6. File format
+
+A superset of the vscode-restclient `.http` syntax, so plain HTTP and Connect
+calls coexist in one buffer and the existing conventions carry over. `http2curl`
+(MIT) already parses the base syntax including `@variable` declarations and
+`{{interpolation}}`; the Connect layer is additive.
+
+```http
+@base = http://localhost:8080
+@user = {{base}}/acme.user.v1.UserService
+
+### plain HTTP still works
+GET {{base}}/healthz
+
+### a Connect call, written longhand
+POST {{user}}/GetUser
+Content-Type: application/json
+Connect-Protocol-Version: 1
+
+{"id": "123"}
+
+### the same call, shorthand -- headers and method are implied
+>> acme.user.v1.UserService/GetUser
+{"id": "123"}
+```
+
+The `>>` shorthand is the only new syntax. It expands to the longhand form
+above against the current `@base`, which removes the boilerplate that makes
+hand-written Connect requests tedious.
+
+Open question: whether `>>` should also be the marker that selects the
+`buf curl` executor, or whether that is a separate per-request directive. See
+§9.
+
+### Selection model
+
+http.hx requires the whole request to be **selected** before executing, which
+suits Helix's selection-action model but is painful without a textobject.
+connect.hx should support both: execute the primary selection if there is one,
+otherwise expand from the cursor to the enclosing `###` block. The latter is
+what every other editor does and there is no reason to be austere about it.
+
+---
+
+## 7. Executors
+
+Two backends behind one interface, chosen per request.
+
+| | `curl` | `buf curl` |
+| --- | --- | --- |
+| Dependency | curl only | buf on PATH |
+| Schema needed | no | reflection or `--schema` |
+| Unary JSON | yes | yes |
+| Streaming | unreadable framing | decoded |
+| Unknown-field typos | silently ignored | rejected client-side |
+| Error `details` | opaque | decodable |
+| Arbitrary HTTP | yes | no |
+
+`curl` is the default and the only hard dependency: the plugin must be useful
+on a machine without buf, and plain HTTP requests in the same file need it
+anyway. `buf curl` is selected when available and when the request is a
+Connect method call.
+
+`:connect-doctor` (implemented) reports which are present.
+
+---
+
+## 8. Rendering
+
+A persistent `*connect*` scratch buffer in a split, markdown, following the
+shape http.hx established -- it works and there is no reason to be novel.
+
+Per response: the method reference, the HTTP status, timing, the response
+headers (toggleable), then the body. Set the buffer language for highlighting;
+inject `json` for the body region.
+
+Connect-specific: when the status is non-2xx, render `code` and `message`
+prominently rather than leaving them as JSON keys, since that is the entire
+information content of a failed call.
+
+**Blocking.** `run-command` drains concurrently but still `thread-join!`s, so
+the call blocks the editor thread until the process exits. Against localhost
+this is imperceptible; against a slow endpoint it freezes the editor. The
+timeout (default 30s, as http.hx uses) bounds the damage but does not fix it.
+A non-blocking path -- spawn, return, poll via
+`enqueue-thread-local-callback-with-delay`, repopulate the buffer when the
+process exits -- is the known fix, and the primitives exist. Deferred until
+the blocking version proves annoying in practice.
+
+---
+
+## 9. Milestones
+
+- **0. Plumbing.** *(done)* Flake, cog contract, dependency closure, pure
+  request construction, tests gating the build, `:connect-doctor` proving the
+  cog loads and can spawn a process from the editor thread.
+- **1. Execute a request.** Parse the enclosing block, build curl argv, run it,
+  render into `*connect*`. Longhand syntax only. This is the point at which the
+  plugin becomes useful.
+- **2. Shorthand and ergonomics.** The `>>` form, `@base`, cursor-based block
+  expansion, keybindings.
+- **3. `buf curl` executor.** Selected when buf is present; unlocks streaming,
+  validation and decoded errors at once.
+- **4. Method discovery.** `--list-methods` into a picker.
+- **5. Request scaffolding.** Descriptor set to skeleton body. The biggest
+  single ergonomic win, and the point at which this stops being "an http client
+  that knows a URL shape".
+
+Milestones 1 and 2 need no protobuf tooling at all. That ordering is
+deliberate: it produces something usable before any schema work begins, and
+the schema work is then informed by actual use rather than speculation.
+
+---
+
+## 10. Open questions
+
+- Does `>>` select the executor, or is that orthogonal? Leaning orthogonal: a
+  `# @executor buf` directive, defaulting to buf-when-available.
+- Where do descriptor sets get cached, and what invalidates them? A
+  `.connect-cache/` in the workspace is the obvious answer; reflection makes it
+  optional.
+- Is a `.connect` file type worth registering, or should this just be `.http`?
+  Registering a new type means another grammar problem; reusing `.http` means
+  http.hx and connect.hx would both claim the same buffers if both are
+  installed.
+- Helix ships no `http` tree-sitter grammar (confirmed: nothing matching in the
+  runtime `grammars/` or `queries/`). Highlighting requires packaging
+  `rest-nvim/tree-sitter-http` separately. Worth doing once the format settles,
+  not before.
+
+---
+
+## Appendix: verification log
+
+Everything asserted above as "verified" was checked on 2026-09-16 against
+steel 0.8.2, buf 1.72.0 and `https://demo.connectrpc.com`:
+
+- Connect unary over plain curl returns the bare JSON message. ✓
+- An unknown JSON field is accepted with HTTP 200 by the server and rejected
+  client-side by `buf curl`. ✓
+- `buf curl --list-methods <url>` lists methods via reflection with no local
+  `.proto` files. ✓
+- `buf curl` decodes a server-streaming response (`ElizaService/Introduce`)
+  into sequential JSON messages. ✓
+- `--schema` takes a directory or module, **not** a URL; omitting it is what
+  selects reflection. ✓
+- Steel: `spawn-process` -> `(Ok ChildProcess)`, `set-piped-stdout!` required
+  for capture, `string->jsexpr` yields floats for integers. ✓
+- Helix cogs expose no completion-provider API. ✓
