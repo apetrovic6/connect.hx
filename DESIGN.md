@@ -5,10 +5,14 @@ them against a running service, read the response in a split. The `.http`-file
 workflow from VS Code's REST Client and the JetBrains HTTP Client, specialised
 for Connect.
 
-Status: **step 0**. The nix plumbing, the cog contract and the pure request
-construction exist and are tested; no request has been sent from inside the
-editor yet. Everything below the "Architecture" heading is a plan, not a
+Status: **milestone 1**. Requests execute: the block under the cursor is parsed,
+sent with curl, and rendered into a `*connect*` split. Verified against the live
+demo service for success, HTTP error, Connect error envelope, and no-request
+cases. No schema awareness yet, and execution blocks the editor thread.
+
+Everything below the "Architecture" heading beyond milestone 1 is a plan, not a
 description of working code.
+
 
 Last updated 2026-09-16.
 
@@ -333,16 +337,48 @@ Two consequences worth keeping in mind:
 
 ## 8. Rendering
 
-A persistent `*connect*` scratch buffer in a split, markdown, following the
-shape http.hx established -- it works and there is no reason to be novel.
+A persistent `*connect*` scratch buffer in a vertical split, markdown, following
+the shape http.hx established -- it works and there is no reason to be novel.
+Focus returns to the request buffer after rendering: the response is to be read,
+not edited.
 
-Per response: the method reference, the HTTP status, timing, the response
-headers (toggleable), then the body. Set the buffer language for highlighting;
-inject `json` for the body region.
+Each response **replaces** the buffer rather than appending to it. An
+append-only log puts the newest result off-screen exactly when it matters; the
+request line stays in the header so it is never ambiguous which call produced
+what.
 
-Connect-specific: when the status is non-2xx, render `code` and `message`
-prominently rather than leaving them as JSON keys, since that is the entire
-information content of a failed call.
+The rendered shape, as implemented:
+
+```markdown
+# POST https://demo.connectrpc.com/connectrpc.eliza.v1.ElizaService/Say
+
+`HTTP/2 200`  ·  309ms
+
+```json
+{"sentence":"Hello there...how are you today?"}
+```
+
+<details>
+<summary>response headers</summary>
+...
+</details>
+```
+
+The body is fenced as `json` when the response Content-Type says so, which is
+what gives it highlighting inside the markdown buffer. Response headers go in a
+`<details>` block -- present without being in the way, and no toggle command to
+implement.
+
+Connect-specific: on a non-2xx, `code` and `message` are lifted out of the error
+envelope into the status line (`` `HTTP/2 400` -- **invalid_argument: ...** ``),
+since that is the entire information content of a failed call. The body is still
+rendered verbatim underneath. Parsing there is best-effort and guarded: a non-2xx
+whose body is not a Connect envelope (a router's plain-text 404, say) simply
+renders without a summary.
+
+The parsed value is used ONLY for that summary. steel's JSON reader turns
+integers into floats, so a re-serialised body would misreport what the server
+actually sent -- the body shown is always the bytes curl received.
 
 **Blocking.** `run-command` drains concurrently but still `thread-join!`s, so
 the call blocks the editor thread until the process exits. Against localhost
@@ -360,11 +396,12 @@ the blocking version proves annoying in practice.
 - **0. Plumbing.** *(done)* Flake, cog contract, dependency closure, pure
   request construction, tests gating the build, `:connect-doctor` proving the
   cog loads and can spawn a process from the editor thread.
-- **1. Execute a request.** Parse the enclosing block, build curl argv, run it,
-  render into `*connect*`. Longhand syntax only. This is the point at which the
-  plugin becomes useful.
-- **2. Shorthand and ergonomics.** The `>>` form, `@base`, cursor-based block
-  expansion, keybindings.
+- **1. Execute a request.** *(done)* Parse the enclosing block, build curl argv,
+  run it, render into `*connect*`. Longhand syntax only. Cursor-based, no
+  selection required. `:connect-exec`, `:connect-set-timeout`.
+- **2. Shorthand and ergonomics.** The `>>` form, executing a selection or every
+  block in the buffer, keybindings. (`@base` and cursor-based block
+  selection landed in milestone 1.)
 - **3. `buf curl` executor.** Selected when buf is present; unlocks streaming,
   validation and decoded errors at once.
 - **4. Method discovery.** `--list-methods` into a picker.

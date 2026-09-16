@@ -4,9 +4,9 @@ A [ConnectRPC](https://connectrpc.com) client for the [Helix](https://helix-edit
 editor: write requests in a buffer, execute them against a running service, read
 the response in a split.
 
-> **Status: step 0.** The build, the cog contract and the pure request
-> construction exist and are tested. No request is executed from the editor
-> yet. See [DESIGN.md](./DESIGN.md) for the plan and the reasoning behind it.
+> **Status: milestone 1.** Requests execute: put the cursor in a request block
+> and run `:connect-exec`. Verified against a live service. No schema awareness
+> yet, and execution blocks the editor thread while the request is in flight.
 
 Requires Helix with the experimental Steel plugin system
 ([mattwparas/helix, `steel-event-system`](https://github.com/mattwparas/helix/tree/steel-event-system)).
@@ -69,7 +69,9 @@ produces a byte-identical store path is the symptom.
 
 | Command | Status |
 | --- | --- |
-| `:connect-doctor` | implemented -- reports available executors |
+| `:connect-doctor` | reports which executors are on PATH |
+| `:connect-exec` | execute the request under the cursor into `*connect*` |
+| `:connect-set-timeout [seconds]` | set or show the request timeout (default 30s) |
 
 ## Licence
 

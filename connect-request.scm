@@ -94,3 +94,219 @@
              (flat-mapping (lambda (h)
                              (list "-H" (string-append (car h) ": " (cdr h)))))
              (into-list)))
+
+;; ---------------------------------------------------------------------------
+;; Buffer parsing
+;;
+;; The format is a superset of the vscode-restclient `.http` syntax: requests
+;; separated by `###`, `@name = value` declarations, `{{name}}` interpolation.
+;; Parsing it here rather than delegating to http2curl because the Connect
+;; layer needs the pieces individually (the method reference in particular),
+;; while http2curl only exposes a whole-input string->curl-string conversion.
+;; ---------------------------------------------------------------------------
+
+(provide parse-variables
+         resolve-variables
+         expand-variables
+         split-blocks
+         block-lines
+         block-first-line
+         block-last-line
+         block-at-line
+         char-offset->line
+         parse-request
+         request-method
+         request-url
+         request-headers
+         request-body
+         request->curl-argv)
+
+;; How many passes `resolve-variables` makes before giving up. A variable
+;; referring to another variable is normal (`@eliza = {{base}}/...`); a cycle
+;; is not, and must not hang the editor thread.
+(define max-variable-passes 10)
+
+(define (comment-line? line)
+  (let ([t (trim line)])
+    (or (starts-with? t "#") (starts-with? t "//"))))
+
+(define (blank-line? line)
+  (= (string-length (trim line)) 0))
+
+(define (declaration-line? line)
+  (starts-with? (trim line) "@"))
+
+;; Split on the FIRST occurrence of DELIM, returning (before . after), or
+;; #false when DELIM does not occur. Used for both `@name = value` and
+;; `Header: value`, neither of which may re-split on a delimiter appearing in
+;; the value -- a URL contains colons, a token contains equals signs.
+(define (split-once str delim)
+  (let ([parts (split-many str delim)])
+    (if (or (null? parts) (null? (cdr parts)))
+        #false
+        (cons (car parts)
+              (trim-leading-delim (substring str
+                                             (string-length (car parts))
+                                             (string-length str))
+                                  delim)))))
+
+(define (trim-leading-delim str delim)
+  (if (starts-with? str delim)
+      (substring str (string-length delim) (string-length str))
+      str))
+
+;; Collect `@name = value` declarations from the whole buffer, as an alist.
+;;
+;; File-wide rather than per-block, and last-wins, matching vscode-restclient:
+;; a declaration applies to every request in the file, so a `@base` at the top
+;; reaches the request at the bottom.
+(define (parse-variables text)
+  (transduce (split-many text "\n")
+             (flat-mapping
+              (lambda (line)
+                (let ([t (trim line)])
+                  (if (declaration-line? t)
+                      (let ([parts (split-once (substring t 1 (string-length t)) "=")])
+                        (if parts (list (cons (trim (car parts)) (trim (cdr parts)))) '()))
+                      '()))))
+             (into-list)))
+
+;; Expand `{{name}}` references in STR against VARS.
+(define (expand-variables str vars)
+  (foldl (lambda (kv acc)
+           (string-replace acc (string-append "{{" (car kv) "}}") (cdr kv)))
+         str
+         vars))
+
+;; Expand references *within* the variable values themselves, so `@eliza =
+;; {{base}}/pkg.Svc` resolves. Iterates to a fixed point rather than assuming
+;; declaration order, and gives up after max-variable-passes so a cycle
+;; (`@a = {{b}}`, `@b = {{a}}`) cannot spin on the editor thread.
+(define (resolve-variables vars)
+  (let loop ([current vars] [pass 0])
+    (if (>= pass max-variable-passes)
+        current
+        (let ([next (map (lambda (kv)
+                           (cons (car kv) (expand-variables (cdr kv) current)))
+                         current)])
+          (if (equal? next current) current (loop next (+ pass 1)))))))
+
+;; A block is (first-line last-line lines), zero-indexed and inclusive. The
+;; `###` separator belongs to the block it introduces, so a cursor resting on
+;; the separator selects the request beneath it rather than the one above.
+(define (make-block first last lines) (list first last lines))
+(define (block-first-line b) (car b))
+(define (block-last-line b) (car (cdr b)))
+(define (block-lines b) (car (cdr (cdr b))))
+
+(define (separator-line? line) (starts-with? (trim line) "###"))
+
+(define (split-blocks text)
+  (let ([lines (split-many text "\n")])
+    (let loop ([ls lines] [i 0] [start 0] [cur '()] [acc '()])
+      (cond
+        [(null? ls)
+         (reverse (cons (make-block start (if (> i 0) (- i 1) 0) (reverse cur)) acc))]
+        [(and (separator-line? (car ls)) (not (= i start)))
+         (loop (cdr ls) (+ i 1) i (list (car ls))
+               (cons (make-block start (- i 1) (reverse cur)) acc))]
+        [else (loop (cdr ls) (+ i 1) start (cons (car ls) cur) acc)]))))
+
+;; The block containing LINE. Falls back to the last block when the line is
+;; past the end, which happens when the cursor sits on the trailing newline.
+(define (block-at-line blocks line)
+  (let loop ([bs blocks] [fallback #false])
+    (cond
+      [(null? bs) fallback]
+      [(and (>= line (block-first-line (car bs)))
+            (<= line (block-last-line (car bs))))
+       (car bs)]
+      [else (loop (cdr bs) (car bs))])))
+
+;; Zero-indexed line containing character OFFSET.
+(define (char-offset->line text offset)
+  (let loop ([i 0] [line 0])
+    (cond
+      [(>= i offset) line]
+      [(>= i (string-length text)) line]
+      [(char=? (string-ref text i) #\newline) (loop (+ i 1) (+ line 1))]
+      [else (loop (+ i 1) line)])))
+
+;; A parsed request: (method url headers body). Headers is an alist.
+(define (make-request method url headers body) (list method url headers body))
+(define (request-method r) (car r))
+(define (request-url r) (car (cdr r)))
+(define (request-headers r) (car (cdr (cdr r))))
+(define (request-body r) (car (cdr (cdr (cdr r)))))
+
+;; Parse one block's LINES into a request, expanding VARS as it goes.
+;;
+;; Returns #false when the block holds no request line -- an all-comment block
+;; or the `@`-declaration preamble above the first `###`. The caller reports
+;; that; it is the common "cursor is not in a request" case, not an error.
+(define (parse-request lines vars)
+  (let ([body-lines (drop-leading-noise lines)])
+    (if (null? body-lines)
+        #false
+        (let* ([request-line (expand-variables (trim (car body-lines)) vars)]
+               [parts (split-once request-line " ")])
+          (if (not parts)
+              #false
+              (let* ([method (trim (car parts))]
+                     [url (trim (cdr parts))]
+                     [rest (cdr body-lines)]
+                     [split (split-headers-and-body rest)]
+                     [headers (map (lambda (h)
+                                     (cons (car h) (expand-variables (cdr h) vars)))
+                                   (car split))]
+                     [body (expand-variables (cdr split) vars)])
+                (if (= (string-length url) 0)
+                    #false
+                    (make-request method url headers body))))))))
+
+;; Drop blank lines, comments and `@` declarations ahead of the request line.
+(define (drop-leading-noise lines)
+  (cond
+    [(null? lines) '()]
+    [(or (blank-line? (car lines))
+         (comment-line? (car lines))
+         (declaration-line? (car lines)))
+     (drop-leading-noise (cdr lines))]
+    [else lines]))
+
+;; Headers run until the first blank line; everything after it is the body.
+;; Returns (headers-alist . body-string).
+(define (split-headers-and-body lines)
+  (let loop ([ls lines] [headers '()])
+    (cond
+      [(null? ls) (cons (reverse headers) "")]
+      [(blank-line? (car ls))
+       (cons (reverse headers) (trim (string-join (cdr ls) "\n")))]
+      [(comment-line? (car ls)) (loop (cdr ls) headers)]
+      [else
+       (let ([parts (split-once (car ls) ":")])
+         (if parts
+             (loop (cdr ls) (cons (cons (trim (car parts)) (trim (cdr parts))) headers))
+             (loop (cdr ls) headers)))])))
+
+;; A parsed request to curl argv.
+;;
+;; Headers written in the buffer win over the Connect defaults: a request that
+;; explicitly sets Content-Type to application/proto must not have
+;; application/json reimposed underneath it.
+(define (request->curl-argv req)
+  (let* ([written (request-headers req)]
+         [defaults (filter (lambda (d)
+                             (not (assoc-ci (car d) written)))
+                           (connect-headers))])
+    (curl-argv (request-url req) (append defaults written) (request-body req))))
+
+;; Header names are case-insensitive, so `content-type:` in the buffer must
+;; still suppress the `Content-Type` default.
+(define (assoc-ci key alist)
+  (let ([needle (string-downcase key)])
+    (let loop ([as alist])
+      (cond
+        [(null? as) #false]
+        [(equal? (string-downcase (car (car as))) needle) (car as)]
+        [else (loop (cdr as))]))))

@@ -74,3 +74,118 @@
         #true)
 
 (displayln "all request tests passed")
+
+;; ---------------------------------------------------------------------------
+;; Buffer parsing
+;; ---------------------------------------------------------------------------
+
+(define sample
+  (string-join
+   (list "@base = https://demo.connectrpc.com"
+         "@eliza = {{base}}/connectrpc.eliza.v1.ElizaService"
+         ""
+         "### say hello"
+         "POST {{eliza}}/Say"
+         "Content-Type: application/json"
+         ""
+         "{\"sentence\": \"hello\"}"
+         ""
+         "### plain http still works"
+         "GET {{base}}/healthz")
+   "\n"))
+
+(define vars (resolve-variables (parse-variables sample)))
+
+(check! "parse-variables finds both declarations"
+        (length (parse-variables sample))
+        2)
+
+;; @eliza refers to @base, so resolution has to reach a fixed point rather
+;; than take the values as written.
+(check! "resolve-variables expands a variable that refers to another"
+        (cdr (assoc "eliza" vars))
+        "https://demo.connectrpc.com/connectrpc.eliza.v1.ElizaService")
+
+(check! "expand-variables substitutes every occurrence"
+        (expand-variables "{{base}}/a and {{base}}/b" vars)
+        "https://demo.connectrpc.com/a and https://demo.connectrpc.com/b")
+
+;; A cycle must terminate rather than spin on the editor thread.
+(check! "resolve-variables survives a cycle"
+        (list? (resolve-variables (list (cons "a" "{{b}}") (cons "b" "{{a}}"))))
+        #true)
+
+(check! "split-blocks finds the preamble and both requests"
+        (length (split-blocks sample))
+        3)
+
+;; The separator introduces the block below it, so a cursor on the `###` line
+;; selects that request rather than the one above.
+(check! "block-at-line maps the separator line to the block it introduces"
+        (block-first-line (block-at-line (split-blocks sample) 3))
+        3)
+
+(check! "block-at-line maps a body line to its own block"
+        (block-first-line (block-at-line (split-blocks sample) 7))
+        3)
+
+(check! "block-at-line maps the second request"
+        (block-first-line (block-at-line (split-blocks sample) 10))
+        9)
+
+(check! "char-offset->line counts newlines"
+        (char-offset->line "a\nb\nc" 4)
+        2)
+
+(define req (parse-request (block-lines (block-at-line (split-blocks sample) 5)) vars))
+
+(check! "parse-request reads the method" (request-method req) "POST")
+
+(check! "parse-request expands the url"
+        (request-url req)
+        "https://demo.connectrpc.com/connectrpc.eliza.v1.ElizaService/Say")
+
+(check! "parse-request reads headers"
+        (assoc "Content-Type" (request-headers req))
+        (cons "Content-Type" "application/json"))
+
+(check! "parse-request reads the body"
+        (request-body req)
+        "{\"sentence\": \"hello\"}")
+
+;; The declaration preamble above the first `###` holds no request.
+(check! "parse-request returns #false for a block with no request line"
+        (parse-request (block-lines (block-at-line (split-blocks sample) 0)) vars)
+        #false)
+
+;; A body containing a blank line must survive intact -- only the FIRST blank
+;; line ends the header section.
+(check! "parse-request keeps blank lines inside the body"
+        (request-body
+         (parse-request (list "POST http://x/p.S/M" "" "{" "" "}") '()))
+        "{\n\n}")
+
+(check! "request->curl-argv supplies the protocol version header"
+        (if (member "Connect-Protocol-Version: 1" (request->curl-argv req)) #true #false)
+        #true)
+
+;; A Content-Type written in the buffer must not have the default reimposed
+;; underneath it, or `application/proto` silently becomes json.
+(check! "request->curl-argv does not duplicate a written header"
+        (length (filter (lambda (a) (starts-with? a "Content-Type"))
+                        (request->curl-argv req)))
+        1)
+
+(check! "request->curl-argv honours a lowercased override"
+        (if (member "content-type: application/proto"
+                    (request->curl-argv
+                     (parse-request (list "POST http://x/p.S/M"
+                                          "content-type: application/proto"
+                                          ""
+                                          "{}")
+                                    '())))
+            #true
+            #false)
+        #true)
+
+(displayln "all parsing tests passed")
