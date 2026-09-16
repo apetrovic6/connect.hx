@@ -293,6 +293,42 @@ Connect method call.
 
 `:connect-doctor` (implemented) reports which are present.
 
+### Where buf comes from
+
+**The project's dev shell, not the editor and not this package.** Decided
+2026-09-16; the reasoning matters because the obvious alternatives are both
+worse.
+
+`buf` is project state. The schema it reads lives with the project -- `buf.yaml`,
+`buf.lock`, the module dependencies, the proto tree -- and the buf version
+should be whatever that project pins. An editor-global buf is a second,
+unrelated pin that silently shadows the project's.
+
+So the plugin resolves it **from PATH at call time** (`command -v`, then
+`/bin/sh -c`, which inherits the editor's environment) and never records a
+store path. Verified by putting a fake `buf` earlier on PATH and watching
+`:connect-doctor` report it:
+
+```
+connect.hx: curl 8.21.0 | buf 1.99.0-from-project-devshell
+```
+
+Two consequences worth keeping in mind:
+
+- **This package must not depend on buf.** Beyond the version-pinning problem,
+  `buildHelixPlugin` is `dontBuild`/`dontConfigure` with an install phase that
+  globs `**/*.scm` -- there is no wrapper step in which to inject a PATH entry,
+  so the packaging format cannot express a runtime dependency even if it were
+  wanted. (`buildHelixPluginWithNative` is for `#%require-dylib` libraries,
+  which is a different mechanism.)
+- **PATH comes from where helix was launched**, not from the file that is open.
+  Launched from inside the project's dev shell, the plugin sees that buf;
+  launched from a desktop entry, it does not, even with the same project open.
+  A helix wrapper that appends buf to PATH (nix-wrapper-modules uses
+  `wrapperSuffixEnv`, so a dev shell's buf still wins) is a reasonable floor if
+  that turns out to be annoying in practice. Not done, deliberately: the
+  degraded mode is honest and schema features are project-scoped anyway.
+
 ---
 
 ## 8. Rendering

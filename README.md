@@ -26,6 +26,10 @@ nix build            # also runs the tests
 nix fmt
 ```
 
+`buf` is resolved from PATH at call time, so the right place for it is the
+project's own dev shell -- see [DESIGN.md](./DESIGN.md) §7. Note that PATH comes
+from wherever helix was launched, not from the file you open.
+
 The dev shell points `STEEL_HOME` at `.dev/steel-home`, with this checkout
 symlinked in as the `connect.hx` cog alongside its dependencies, so `require`
 resolves at the prompt exactly as it does inside Helix.
@@ -55,6 +59,11 @@ module, or the commands will not be registered:
 ```
 
 Verify with `:connect-doctor`, which reports which executors are on PATH.
+
+When consuming it as a local `path:` input during development, note that nix
+pins the input by narHash: editing this repo does **not** affect a rebuild of
+the consumer until `nix flake update connect-hx` is run there. A rebuild that
+produces a byte-identical store path is the symptom.
 
 ## Commands
 

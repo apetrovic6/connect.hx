@@ -30,13 +30,19 @@
                          (hash 'timeout-ms probe-timeout-ms))
             'ok))
 
-;; Report the version line of NAME, or #false when it is not installed.
-(define (binary-version name flag)
+;; Report the version of NAME, or #false when it is not installed.
+;;
+;; PROBE is a shell pipeline rather than a flag because the two executors
+;; disagree wildly on format: `buf --version` prints a bare "1.72.0", while
+;; `curl --version` opens with a 200-character line listing every linked
+;; library. The status line truncates, so the caller reduces each to a bare
+;; version before it ever gets there.
+(define (binary-version name probe)
   (if (binary-available? name)
-      (let ([result (run-command (string-append name " " flag " 2>&1 | head -1")
-                                 (hash 'timeout-ms probe-timeout-ms))])
+      (let ([result (run-command probe (hash 'timeout-ms probe-timeout-ms))])
         (if (hash-ref result 'ok)
-            (trim (hash-ref result 'stdout))
+            (let ([out (trim (hash-ref result 'stdout))])
+              (if (> (string-length out) 0) out "(unknown version)"))
             #false))
       #false))
 
@@ -49,12 +55,14 @@
 ;; curl is the zero-schema fallback; buf carries `buf curl`, which validates
 ;; request bodies against the schema and decodes streaming responses.
 (define (connect-doctor)
-  (let ([curl-version (binary-version "curl" "--version")]
-        [buf-version (binary-version "buf" "--version")])
+  (let ([curl-version (binary-version "curl" "curl --version | head -1 | cut -d' ' -f2")]
+        [buf-version (binary-version "buf" "buf --version 2>&1 | head -1")])
     (if curl-version
         (set-status!
-         (string-append "connect.hx: "
+         (string-append "connect.hx: curl "
                         curl-version
                         " | buf "
-                        (if buf-version buf-version "MISSING (schema features unavailable)")))
+                        (if buf-version
+                            buf-version
+                            "not found (schema features unavailable)")))
         (set-error! "connect.hx: curl not found on PATH -- no executor available"))))
