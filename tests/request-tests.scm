@@ -619,3 +619,13 @@
         #true)
 
 (displayln "all error detail tests passed")
+
+(check! "url->method-ref keeps just the service and method"
+        (url->method-ref "http://localhost:5000/api/user.v1.UserService/Me")
+        "user.v1.UserService/Me")
+
+(check! "url->method-ref leaves an odd url alone"
+        (url->method-ref "notaurl")
+        "notaurl")
+
+(displayln "all method-ref tests passed")

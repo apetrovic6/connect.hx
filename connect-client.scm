@@ -25,7 +25,8 @@
                   set-status!
                   set-error!
                   cursor-position
-                  enqueue-thread-local-callback))
+                  enqueue-thread-local-callback
+                  enqueue-thread-local-callback-with-delay))
 
 (provide connect-doctor
          connect-exec
@@ -163,9 +164,25 @@
           (helix.static.select_all)
           (helix.static.delete_selection)
           (helix.static.insert_string (string-append text existing))
-          (helix.static.goto_file_start)
+          ;; Back to the top, via the SELECTION rather than a goto.
+          ;;
+          ;; insert_string leaves the cursor at the end of what it wrote, and
+          ;; the view scrolls with it, so the entry header ends up above the top
+          ;; of the pane. goto_file_start does not bring it back -- neither
+          ;; inline nor deferred -- but select_all does reliably work here, and
+          ;; flipping it puts the head at position 0 for collapse_selection to
+          ;; land on.
+          (helix.static.select_all)
+          (helix.static.flip_selections)
+          (helix.static.collapse_selection)
           (helix.static.align_view_top)
-          (editor-set-focus! origin))))))
+          ;; Focus goes back in a LATER callback, not here. helix only keeps the
+          ;; cursor in view for the focused view, so the pane has to still be
+          ;; focused when the next frame renders -- otherwise it keeps the
+          ;; offset it took when the cursor was at the end of the insert, and
+          ;; the entry header sits above the top of the pane with the cursor
+          ;; correctly at 1:1 underneath it.
+          (enqueue-thread-local-callback (lambda () (editor-set-focus! origin))))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Response formatting
@@ -512,7 +529,11 @@
       [else
        (append-response!
         (format-buf-response req (trim (hash-ref result 'stdout)) elapsed (next-index!) #true))
-       (string-append "connect.hx: buf ok in " (to-string elapsed) "ms")])))
+       (string-append "connect.hx: "
+                      (url->method-ref (request-url req))
+                      " ok in "
+                      (to-string elapsed)
+                      "ms")])))
 
 (define (execute-with-curl req)
   (let* ([started (instant/now)]
@@ -542,10 +563,13 @@
          (append-response!
           (format-response req headers body elapsed (next-index!)))
          (string-append "connect.hx: "
+                        (url->method-ref (request-url req))
+                        " "
                         (trim (car (split-many headers "\n")))
                         " in "
                         (to-string elapsed)
                         "ms"))])))
+
 ;;@doc
 ;; Empty the *connect* buffer.
 (define (connect-clear)

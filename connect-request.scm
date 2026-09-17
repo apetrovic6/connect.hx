@@ -568,7 +568,8 @@
 ;; a FileDescriptorSet would be a lot of Scheme for a worse result.
 ;; ---------------------------------------------------------------------------
 
-(provide url->grpc-address
+(provide url->method-ref
+         url->grpc-address
          url-plaintext?
          describe-input-type
          extract-message-template
@@ -713,3 +714,17 @@
 ;; Readable fragments from a base64 Any payload.
 (define (decode-detail-values value)
   (printable-runs (base64-decode value) 3))
+
+;; The `Service/Method` tail of a Connect URL, for labelling a response without
+;; the host and path prefix. Falls back to the whole URL if it does not look
+;; like one.
+(define (url->method-ref url)
+  (let ([segments (split-many url "/")])
+    (if (< (length segments) 2)
+        url
+        (let* ([n (length segments)]
+               [method (list-ref segments (- n 1))]
+               [service (list-ref segments (- n 2))])
+          (if (or (= (string-length method) 0) (= (string-length service) 0))
+              url
+              (string-append service "/" method))))))
