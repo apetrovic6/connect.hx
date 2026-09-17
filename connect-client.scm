@@ -305,24 +305,17 @@
             (set-error! "connect.hx: timeout must be a positive number of seconds")))))
 
 ;;@doc
-;; Execute the request under the cursor and show the response in *connect*.
+;; Execute the request under the cursor
 (define (connect-exec)
   (run-blocks (blocks-under-cursor) "under the cursor"))
 
 ;;@doc
 ;; Execute every request the selection touches.
-;;
-;; Overlap, not containment: a selection clipping one line of a request runs the
-;; whole of it, since running a fragment is never what was meant.
 (define (connect-exec-selection)
   (run-blocks (blocks-in-selection) "in the selection"))
 
 ;;@doc
 ;; Execute every request in the buffer, top to bottom.
-;;
-;; One request blocks the editor thread; a buffer of them blocks it for their
-;; total time, with the timeout bounding each. Worth knowing before pointing it
-;; at a file of slow endpoints.
 (define (connect-exec-buffer)
   (run-blocks (split-blocks (buffer-text)) "in the buffer"))
 
