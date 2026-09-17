@@ -473,7 +473,13 @@ the blocking version proves annoying in practice.
   PATH; unlocked streaming, client-side validation and readable errors at once.
   `# @executor curl` forces the other way, `@schema` supplies descriptors when
   the server has no reflection.
-- **4. Method discovery.** `--list-methods` into a picker.
+- **4. Method discovery.** *(done, not as a picker)* `:connect-methods` lists
+  what `@base` serves, rendered into *connect* as `>>` lines ready to yank. NOT a
+  fuzzy picker: helix registers two pickers and both open the selection as a
+  file path, and `prompt` has no completion function, so a picker over arbitrary
+  strings would mean building a component from scratch with new-component!.
+  Rendering request stubs turned out to suit the workflow better anyway -- what
+  you want after finding a method is a request calling it.
 - **5. Request scaffolding.** Descriptor set to skeleton body. The biggest
   single ergonomic win, and the point at which this stops being "an http client
   that knows a URL shape".

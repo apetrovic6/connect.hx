@@ -93,11 +93,10 @@ Optionally bind the commands under `space H`:
 ```
 
 `space H c` executes under the cursor, `H s` the selection, `H b` the whole
-buffer, `H x` clears. The bindings are scoped to `.connect` and `.http` files --
-helix selects a keymap by the focused file's extension -- so `space H` stays
-free everywhere else. Each extension map inherits a copy of
-the global keymap, which keeps the rest of your bindings working inside those
-files.
+buffer, `H m` lists methods, `H x` clears. The bindings are scoped to `.connect`
+and `.http` files -- helix selects a keymap by the focused file's extension -- so
+`space H` stays free everywhere else. Each extension map inherits a copy of the
+global keymap, which keeps the rest of your bindings working inside those files.
 
 The two entries are labelled once the submenu is open, but the `H` row in the
 parent space menu is blank: a submenu's description is its `KeyTrieNode` name,
@@ -146,6 +145,7 @@ serve reflection. `:connect-doctor` reports which executors are available.
 | `:connect-exec-selection` | execute every request the selection touches |
 | `:connect-exec-buffer` | execute every request in the buffer, top to bottom |
 | `:connect-set-timeout [seconds]` | set or show the request timeout (default 30s) |
+| `:connect-methods` | list the methods `@base` serves, as `>>` lines |
 | `:connect-clear` | empty the `*connect*` log and reset entry numbering |
 
 Responses are appended and numbered, so successive calls can be compared; use

@@ -363,3 +363,44 @@
         "curl")
 
 (displayln "all buf executor tests passed")
+
+;; ---------------------------------------------------------------------------
+;; Method discovery
+;; ---------------------------------------------------------------------------
+
+(define listed (list "connectrpc.eliza.v1.ElizaService/Converse"
+                     "connectrpc.eliza.v1.ElizaService/Say"
+                     "acme.user.v1.UserService/GetUser"))
+
+(check! "group-methods groups by service" (length (group-methods listed)) 2)
+
+;; buf's order is the schema's order, which is more useful than alphabetical.
+(check! "group-methods keeps buf's ordering"
+        (cdr (car (group-methods listed)))
+        (list "Converse" "Say"))
+
+(check! "group-methods names the service"
+        (car (car (group-methods listed)))
+        "connectrpc.eliza.v1.ElizaService")
+
+(check! "group-methods drops blank lines"
+        (length (group-methods (list "" "pkg.S/M" "  ")))
+        1)
+
+(check! "group-methods drops lines that are not method refs"
+        (length (group-methods (list "Failure: something went wrong")))
+        0)
+
+(check! "buf-list-methods-argv asks for the method list"
+        (if (member "--list-methods" (buf-list-methods-argv "http://x" #false)) #true #false)
+        #true)
+
+(check! "buf-list-methods-argv passes a schema when given"
+        (if (member "--schema" (buf-list-methods-argv "http://x" "./proto")) #true #false)
+        #true)
+
+(check! "buf-list-methods-argv uses reflection otherwise"
+        (member "--schema" (buf-list-methods-argv "http://x" #false))
+        #false)
+
+(displayln "all method discovery tests passed")

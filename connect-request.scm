@@ -124,6 +124,8 @@
          block-at-line
          blocks-in-line-range
          block-executor
+         group-methods
+         buf-list-methods-argv
          buf-curl-argv
          char-offset->line
          parse-request
@@ -478,3 +480,31 @@
                                             (+ 1 (string-length name))
                                             (string-length rest)))])
                 (if (= (string-length value) 0) #false value)))))))
+
+;; Group `pkg.Service/Method` lines by service, preserving buf's ordering.
+;; Returns an alist of service -> list of method names.
+(define (group-methods lines)
+  (let loop ([ls lines] [acc '()])
+    (if (null? ls)
+        (map (lambda (entry) (cons (car entry) (reverse (cdr entry)))) (reverse acc))
+        (let* ([line (trim (car ls))]
+               [parsed (if (= (string-length line) 0) #false (parse-method-ref line))])
+          (if (not parsed)
+              (loop (cdr ls) acc)
+              (let ([service (car parsed)] [method (cdr parsed)])
+                (if (assoc service acc)
+                    (loop (cdr ls)
+                          (map (lambda (entry)
+                                 (if (equal? (car entry) service)
+                                     (cons (car entry) (cons method (cdr entry)))
+                                     entry))
+                               acc))
+                    (loop (cdr ls) (cons (cons service (list method)) acc)))))))))
+
+;; Argv for listing a server's methods. Reflection unless a schema is given.
+(define (buf-list-methods-argv url schema)
+  (append (list "curl" "--list-methods")
+          (if (and (string? schema) (> (string-length schema) 0))
+              (list "--schema" schema)
+              '())
+          (list url)))

@@ -30,6 +30,7 @@
          connect-exec
          connect-exec-selection
          connect-exec-buffer
+         connect-methods
          connect-set-timeout
          connect-clear
          connect-install-keybindings!)
@@ -551,4 +552,61 @@
           (normal (space (H (c ":connect-exec")
                             (s ":connect-exec-selection")
                             (b ":connect-exec-buffer")
+                            (m ":connect-methods")
                             (x ":connect-clear"))))))
+
+;;@doc
+;; List the methods the server at @base serves
+(define (connect-methods)
+  (let* ([vars (resolve-variables (parse-variables (buffer-text)))]
+         [base (assoc "base" vars)]
+         [schema (let ([declared (assoc "schema" vars)]) (if declared (cdr declared) #false))])
+    (cond
+      [(not (buf-available?))
+       (set-error! "connect.hx: buf is not on PATH -- method discovery needs it")]
+      [(not base) (set-error! "connect.hx: no @base declared")]
+      [else (list-methods-at (cdr base) schema)])))
+
+(define (list-methods-at base schema)
+  (let ([result (run-argv "buf"
+                          (buf-list-methods-argv base schema)
+                          (hash 'timeout-ms (state-ref 'timeout-ms)))])
+    (cond
+      [(hash-ref result 'timed-out) (set-error! "connect.hx: buf timed out listing methods")]
+      [(not (hash-ref result 'ok))
+       (set-error! (string-append "connect.hx: " (first-line (trim (hash-ref result 'stderr)))))]
+      [else
+       (let* ([lines (split-many (hash-ref result 'stdout) "\n")]
+              [grouped (group-methods lines)]
+              [count (foldl (lambda (entry n) (+ n (length (cdr entry)))) 0 grouped)])
+         (if (= count 0)
+             (set-error! (string-append "connect.hx: no methods reported by " base))
+             (begin
+               (append-response! (format-methods base grouped (next-index!)))
+               (set-status! (string-append "connect.hx: "
+                                           (to-string count)
+                                           " method"
+                                           (if (= count 1) "" "s")
+                                           " in "
+                                           (to-string (length grouped))
+                                           " service"
+                                           (if (= (length grouped) 1) "" "s"))))))])))
+
+;; Rendered as `>>` lines rather than a bare list: each one is a request you can
+;; yank straight into a .connect file, which is the thing you wanted the list
+;; for. Helix exposes no picker over arbitrary strings -- both registered ones
+;; open the selection as a file path -- so this is discovery by buffer.
+(define (format-methods base grouped index)
+  (string-append
+   "# " (to-string index) " . methods at " base "\n\n"
+   (apply string-append
+          (map (lambda (entry)
+                 (string-append
+                  "## " (car entry) "\n\n```http\n"
+                  (apply string-append
+                         (map (lambda (method)
+                                (string-append ">> " (car entry) "/" method "\n"))
+                              (cdr entry)))
+                  "```\n\n"))
+               grouped))
+   "---\n\n"))
