@@ -189,3 +189,93 @@
         #true)
 
 (displayln "all parsing tests passed")
+
+;; ---------------------------------------------------------------------------
+;; The `>>` shorthand
+;; ---------------------------------------------------------------------------
+
+(define short-vars (list (cons "base" "https://demo.connectrpc.com")))
+
+(define (parse-lines lines vars) (parse-request lines vars))
+
+(define short (parse-lines (list ">> connectrpc.eliza.v1.ElizaService/Say"
+                                 "{\"sentence\": \"hello\"}")
+                           short-vars))
+
+(check! "shorthand implies POST" (request-method short) "POST")
+
+(check! "shorthand builds the url from @base"
+        (request-url short)
+        "https://demo.connectrpc.com/connectrpc.eliza.v1.ElizaService/Say")
+
+;; No blank line after the request line -- that omission is the whole point of
+;; the shorthand, so the body has to be found without one.
+(check! "shorthand takes the body with no blank line"
+        (request-body short)
+        "{\"sentence\": \"hello\"}")
+
+(check! "shorthand is marked as a connect call" (request-connect? short) #true)
+
+(check! "longhand is not marked as a connect call"
+        (request-connect? (parse-lines (list "GET http://x/healthz") '()))
+        #false)
+
+(check! "shorthand still supplies the connect headers"
+        (if (member "Connect-Protocol-Version: 1" (request->curl-argv short)) #true #false)
+        #true)
+
+;; A header line before the body, still without a blank separator.
+(define short-hdr (parse-lines (list ">> pkg.Svc/M"
+                                     "Authorization: Bearer t"
+                                     "{\"a\": 1}")
+                               short-vars))
+
+(check! "shorthand reads a header written above the body"
+        (assoc "Authorization" (request-headers short-hdr))
+        (cons "Authorization" "Bearer t"))
+
+;; The body's own colon must not be mistaken for a header separator.
+(check! "shorthand does not eat the body as a header"
+        (request-body short-hdr)
+        "{\"a\": 1}")
+
+(check! "shorthand accepts an explicit blank line too"
+        (request-body (parse-lines (list ">> pkg.Svc/M" "" "{\"a\": 1}") short-vars))
+        "{\"a\": 1}")
+
+;; An absolute reference ignores @base, for a one-off call to another host.
+(check! "shorthand takes an absolute url as given"
+        (request-url (parse-lines (list ">> https://other.example.com/pkg.Svc/M") '()))
+        "https://other.example.com/pkg.Svc/M")
+
+(check! "shorthand expands variables in the reference"
+        (request-url (parse-lines (list ">> {{svc}}/Say")
+                                  (list (cons "base" "http://h") (cons "svc" "pkg.Svc"))))
+        "http://h/pkg.Svc/Say")
+
+;; Errors are distinct from #false: #false means "no request here", which is
+;; what a comment block is, while these mean "this meant to be a request".
+(check! "shorthand without @base is an error"
+        (request-error? (parse-lines (list ">> pkg.Svc/M") '()))
+        #true)
+
+(check! "the missing-@base error names the problem"
+        (if (string-contains? (request-error-message (parse-lines (list ">> pkg.Svc/M") '()))
+                              "@base")
+            #true
+            #false)
+        #true)
+
+(check! "shorthand without a slash is an error"
+        (request-error? (parse-lines (list ">> NotAMethodRef") short-vars))
+        #true)
+
+(check! "bare >> is an error"
+        (request-error? (parse-lines (list ">>") short-vars))
+        #true)
+
+(check! "a comment block is still #false, not an error"
+        (parse-lines (list "# just a comment") '())
+        #false)
+
+(displayln "all shorthand tests passed")

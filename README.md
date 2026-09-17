@@ -11,6 +11,34 @@ the response in a split.
 Requires Helix with the experimental Steel plugin system
 ([mattwparas/helix, `steel-event-system`](https://github.com/mattwparas/helix/tree/steel-event-system)).
 
+## Writing requests
+
+A superset of the vscode-restclient `.http` syntax -- `###` separates requests,
+`@name = value` declares a variable, `{{name}}` interpolates one. Put the cursor
+in a request and run `:connect-exec`.
+
+```http
+@base = https://demo.connectrpc.com
+
+### a Connect call, shorthand
+>> connectrpc.eliza.v1.ElizaService/Say
+{"sentence": "hello"}
+
+### the same call written out
+POST {{base}}/connectrpc.eliza.v1.ElizaService/Say
+Content-Type: application/json
+Connect-Protocol-Version: 1
+
+{"sentence": "hello"}
+
+### plain HTTP works too
+GET {{base}}/healthz
+```
+
+`>>` is a Connect call against `@base`: the POST, the URL and the Connect
+headers are implied. An absolute URL after `>>` skips `@base`. Headers may still
+be written above the body, with or without a blank line between.
+
 ## Dependencies
 
 - `curl` -- the default executor, and the only hard requirement.

@@ -259,13 +259,30 @@ Connect-Protocol-Version: 1
 {"id": "123"}
 ```
 
-The `>>` shorthand is the only new syntax. It expands to the longhand form
-above against the current `@base`, which removes the boilerplate that makes
-hand-written Connect requests tedious.
+The `>>` shorthand is the only new syntax, and it is implemented. It expands to
+the longhand form above against the current `@base`: the method, the URL
+assembly and the Connect headers are all implied, since for a unary call they
+never vary. An absolute URL after `>>` skips `@base`, for a one-off call to
+another host.
 
-Open question: whether `>>` should also be the marker that selects the
-`buf curl` executor, or whether that is a separate per-request directive. See
-§9.
+Its header/body split differs from the longhand form, and has to. Longhand ends
+its header block at the first blank line; requiring that blank line is most of
+the ceremony the shorthand exists to remove. So after `>>` the headers are taken
+while the lines still look like headers, and the body starts at the first line
+that does not. "Looks like a header" is therefore strict -- a letter, then
+letters, digits or dashes, then a colon -- because `{"sentence": "hello"}` also
+contains a colon and a looser rule swallows the body as a header named
+`{"sentence"`. An explicit blank line still works if you prefer it.
+
+A malformed `>>` line is reported as an error naming the problem (no `@base`,
+not a method reference, nothing after the marker), distinct from the `#false`
+that means "the cursor is not in a request at all" -- a comment block is the
+latter and is not worth complaining about.
+
+A parsed request carries a `connect?` flag recording that it came from `>>`,
+which is what milestone 3 needs to route those to `buf curl` while leaving plain
+HTTP on curl. Whether that flag should be the whole of the decision, or a
+`# @executor` directive should override it, is still open.
 
 ### Selection model
 
@@ -433,9 +450,10 @@ the blocking version proves annoying in practice.
 - **1. Execute a request.** *(done)* Parse the enclosing block, build curl argv,
   run it, render into `*connect*`. Longhand syntax only. Cursor-based, no
   selection required. `:connect-exec`, `:connect-set-timeout`.
-- **2. Shorthand and ergonomics.** The `>>` form, executing a selection or every
-  block in the buffer, keybindings. (`@base` and cursor-based block
-  selection landed in milestone 1.)
+- **2. Shorthand and ergonomics.** *(partly done)* The `>>` form is in, and
+  keybindings landed early (`space H`, scoped to .http/.connect). Still open:
+  executing a selection, and executing every block in the buffer. (`@base` and
+  cursor-based block selection landed in milestone 1.)
 - **3. `buf curl` executor.** Selected when buf is present; unlocks streaming,
   validation and decoded errors at once.
 - **4. Method discovery.** `--list-methods` into a picker.

@@ -14,7 +14,7 @@ Connect-Protocol-Version: 1
 
 {"sentence": "hello"}
 
-### unary -- shorthand (milestone 2; not yet parsed)
+### unary -- shorthand: @base plus the method reference is the whole request
 >> connectrpc.eliza.v1.ElizaService/Say
 {"sentence": "hello again"}
 

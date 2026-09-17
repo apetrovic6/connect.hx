@@ -311,9 +311,13 @@
          [block (block-at-line (split-blocks text) line)]
          [vars (resolve-variables (parse-variables text))]
          [req (if block (parse-request (block-lines block) vars) #false)])
-    (if (not req)
-        (set-error! "connect.hx: no request under the cursor")
-        (execute-request req))))
+    (cond
+      [(not req) (set-error! "connect.hx: no request under the cursor")]
+      ;; A malformed `>>` line is a different thing from no request at all, and
+      ;; says why.
+      [(request-error? req)
+       (set-error! (string-append "connect.hx: " (request-error-message req)))]
+      [else (execute-request req)])))
 
 (define (execute-request req)
   (let* ([started (instant/now)]
