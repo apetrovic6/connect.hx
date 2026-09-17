@@ -40,26 +40,43 @@
                    render-picker
                    (hash "handle_event" handle-picker-event "cursor" picker-cursor))))
 
+;; The picker is pushed over the whole screen, so it draws itself into a
+;; centered box rather than filling it. Clearing that box first is not optional:
+;; without it the buffer shows through, and a shorter line leaves the tail of a
+;; longer one behind it ("CreateLake" over "CreateLakeService" reads as
+;; "CreateLakeervice").
+;; NB the parameter is not called `area`: that would shadow the `area`
+;; constructor called below, and the failure is a bare "Function application not
+;; a procedure" with no hint of where.
+(define (popup-area screen)
+  (let* ([width (min 72 (- (area-width screen) 4))]
+         [height (min 18 (- (area-height screen) 4))]
+         [x (+ (area-x screen) (quotient (- (area-width screen) width) 2))]
+         [y (+ (area-y screen) (quotient (- (area-height screen) height) 2))])
+    (area x y (max width 10) (max height 4))))
+
 (define (render-picker state area frame)
-  (let* ([matches (filtered state)]
-         [rows (visible-rows area)]
+  (let* ([popup (popup-area area)]
+         [matches (filtered state)]
+         [rows (visible-rows popup)]
          [offset (unbox (PickerState-offset state))]
          [selected (unbox (PickerState-selected state))]
-         [x (+ (area-x area) 1)]
-         [y (+ (area-y area) 1)]
-         [width (- (area-width area) 2)])
+         [x (+ (area-x popup) 1)]
+         [y (+ (area-y popup) 1)]
+         [width (- (area-width popup) 2)])
+    (buffer/clear frame popup)
+    (block/render frame popup (block))
     (frame-set-string! frame
                        x
                        y
-                       (clamp-width (string-append "> " (unbox (PickerState-query state))) width)
+                       (pad-to (string-append "> " (unbox (PickerState-query state))) width)
                        (theme-scope-ref "ui.text"))
     (let loop ([i 0])
       (when (and (< i rows) (< (+ offset i) (length matches)))
         (let* ([index (+ offset i)]
                [chosen (= index selected)]
-               [label (clamp-width (string-append (if chosen "> " "  ")
-                                                  (list-ref matches index))
-                                   width)])
+               [label (pad-to (string-append (if chosen "> " "  ") (list-ref matches index))
+                              width)])
           (frame-set-string! frame
                              x
                              (+ y 1 i)
@@ -67,12 +84,22 @@
                              (theme-scope-ref (if chosen "ui.selection" "ui.text")))
           (loop (+ i 1)))))))
 
-(define (clamp-width s width)
-  (if (> (string-length s) width) (substring s 0 width) s))
+;; Truncate to WIDTH, then pad back out to it, so the selection highlight is a
+;; full-width bar rather than ending at the text.
+(define (pad-to s width)
+  (cond
+    [(> (string-length s) width) (substring s 0 width)]
+    [(= (string-length s) width) s]
+    [else (string-append s (make-spaces (- width (string-length s))))]))
+
+(define (make-spaces n)
+  (let loop ([i 0] [acc ""])
+    (if (>= i n) acc (loop (+ i 1) (string-append acc " ")))))
 
 (define (picker-cursor state area)
-  (position (+ (area-y area) 1)
-            (+ (area-x area) 3 (string-length (unbox (PickerState-query state))))))
+  (let ([popup (popup-area area)])
+    (position (+ (area-y popup) 1)
+              (+ (area-x popup) 3 (string-length (unbox (PickerState-query state)))))))
 
 (define (handle-picker-event state event)
   (let ([matches (filtered state)])

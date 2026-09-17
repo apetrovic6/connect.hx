@@ -496,12 +496,18 @@
 
 ;; Group `pkg.Service/Method` lines by service, preserving buf's ordering.
 ;; Returns an alist of service -> list of method names.
+;;
+;; The reflection services are dropped: every server that answers --list-methods
+;; necessarily serves them, so they are noise in every listing and calling them
+;; by hand is not a thing anyone does.
 (define (group-methods lines)
   (let loop ([ls lines] [acc '()])
     (if (null? ls)
         (map (lambda (entry) (cons (car entry) (reverse (cdr entry)))) (reverse acc))
         (let* ([line (trim (car ls))]
-               [parsed (if (= (string-length line) 0) #false (parse-method-ref line))])
+               [parsed (if (or (= (string-length line) 0) (infrastructure-method? line))
+                           #false
+                           (parse-method-ref line))])
           (if (not parsed)
               (loop (cdr ls) acc)
               (let ([service (car parsed)] [method (cdr parsed)])
@@ -592,3 +598,9 @@
   (append (if (url-plaintext? url) (list "-plaintext") '())
           (if template? (list "-msg-template") '())
           (list (url->grpc-address url) "describe" symbol)))
+
+;; Server reflection, which every reflective server exposes and nobody calls by
+;; hand. Matched on the well-known package prefix, so a service of your own that
+;; merely has "reflection" in its name is untouched.
+(define (infrastructure-method? line)
+  (starts-with? (trim line) "grpc.reflection."))

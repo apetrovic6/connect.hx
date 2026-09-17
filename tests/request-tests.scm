@@ -505,3 +505,17 @@
         "http://localhost:5000/api/fishing.v1.Svc/Method")
 
 (displayln "all plaintext reflection tests passed")
+
+;; Every reflective server exposes these, so they are noise in every listing.
+(check! "group-methods drops the reflection services"
+        (length (group-methods (list "grpc.reflection.v1.ServerReflection/ServerReflectionInfo"
+                                     "grpc.reflection.v1alpha.ServerReflection/ServerReflectionInfo"
+                                     "lake.v1.LakeService/GetLake")))
+        1)
+
+;; Matched on the package prefix, so a service of your own is untouched.
+(check! "group-methods keeps a service merely named like one"
+        (length (group-methods (list "acme.reflection.v1.MirrorService/Reflect")))
+        1)
+
+(displayln "all reflection-filter tests passed")
