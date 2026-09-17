@@ -113,6 +113,7 @@
          block-first-line
          block-last-line
          block-at-line
+         blocks-in-line-range
          char-offset->line
          parse-request
          request-error?
@@ -426,3 +427,14 @@
         [(null? as) #false]
         [(equal? (string-downcase (car (car as))) needle) (car as)]
         [else (loop (cdr as))]))))
+
+;; Every block overlapping the inclusive line range FROM-LINE..TO-LINE.
+;;
+;; Overlap rather than containment, so a selection touching part of a request
+;; still runs the whole of it -- selecting a body line and getting a request
+;; with no method is never what was meant.
+(define (blocks-in-line-range blocks from-line to-line)
+  (filter (lambda (b)
+            (and (<= (block-first-line b) to-line)
+                 (>= (block-last-line b) from-line)))
+          blocks))

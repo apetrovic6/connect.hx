@@ -450,10 +450,9 @@ the blocking version proves annoying in practice.
 - **1. Execute a request.** *(done)* Parse the enclosing block, build curl argv,
   run it, render into `*connect*`. Longhand syntax only. Cursor-based, no
   selection required. `:connect-exec`, `:connect-set-timeout`.
-- **2. Shorthand and ergonomics.** *(partly done)* The `>>` form is in, and
-  keybindings landed early (`space H`, scoped to .http/.connect). Still open:
-  executing a selection, and executing every block in the buffer. (`@base` and
-  cursor-based block selection landed in milestone 1.)
+- **2. Shorthand and ergonomics.** *(done)* The `>>` form, execute-selection and
+  execute-buffer, and keybindings under `space H` scoped to .http/.connect.
+  (`@base` and cursor-based block selection landed in milestone 1.)
 - **3. `buf curl` executor.** Selected when buf is present; unlocks streaming,
   validation and decoded errors at once.
 - **4. Method discovery.** `--list-methods` into a picker.

@@ -279,3 +279,28 @@
         #false)
 
 (displayln "all shorthand tests passed")
+
+;; ---------------------------------------------------------------------------
+;; Block ranges
+;; ---------------------------------------------------------------------------
+
+(define sample-blocks (split-blocks sample))
+
+(check! "a line range inside one block selects that block"
+        (length (blocks-in-line-range sample-blocks 5 6))
+        1)
+
+;; Overlap, not containment: touching one line of a request runs all of it.
+(check! "a partial overlap still selects the block"
+        (block-first-line (car (blocks-in-line-range sample-blocks 7 7)))
+        3)
+
+(check! "a range spanning two blocks selects both"
+        (length (blocks-in-line-range sample-blocks 5 10))
+        2)
+
+(check! "a range covering the buffer selects every block"
+        (length (blocks-in-line-range sample-blocks 0 99))
+        3)
+
+(displayln "all block range tests passed")

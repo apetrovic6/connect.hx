@@ -92,8 +92,8 @@ Optionally bind the commands under `space H`:
 (connect-install-keybindings!)
 ```
 
-`space H c` executes, `space H x` clears. The bindings are scoped to `.connect`
-and `.http` files -- helix selects a keymap by the focused file's extension --
+`space H c` executes under the cursor, `H s` the selection, `H b` the whole
+buffer, `H x` clears. The bindings are scoped to `.connect` and `.http` files -- helix selects a keymap by the focused file's extension --
 so `space H` stays free everywhere else. Each extension map inherits a copy of
 the global keymap, which keeps the rest of your bindings working inside those
 files.
@@ -121,6 +121,8 @@ produces a byte-identical store path is the symptom.
 | --- | --- |
 | `:connect-doctor` | reports which executors are on PATH |
 | `:connect-exec` | execute the request under the cursor into `*connect*` |
+| `:connect-exec-selection` | execute every request the selection touches |
+| `:connect-exec-buffer` | execute every request in the buffer, top to bottom |
 | `:connect-set-timeout [seconds]` | set or show the request timeout (default 30s) |
 | `:connect-clear` | empty the `*connect*` log and reset entry numbering |
 

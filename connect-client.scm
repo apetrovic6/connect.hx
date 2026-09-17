@@ -28,6 +28,8 @@
 
 (provide connect-doctor
          connect-exec
+         connect-exec-selection
+         connect-exec-buffer
          connect-set-timeout
          connect-clear
          connect-install-keybindings!)
@@ -305,20 +307,98 @@
 ;;@doc
 ;; Execute the request under the cursor and show the response in *connect*.
 (define (connect-exec)
-  (let* ([doc-id (editor->doc-id (editor-focus))]
-         [text (text.rope->string (editor->text doc-id))]
-         [line (char-offset->line text (cursor-position))]
-         [block (block-at-line (split-blocks text) line)]
-         [vars (resolve-variables (parse-variables text))]
-         [req (if block (parse-request (block-lines block) vars) #false)])
-    (cond
-      [(not req) (set-error! "connect.hx: no request under the cursor")]
-      ;; A malformed `>>` line is a different thing from no request at all, and
-      ;; says why.
-      [(request-error? req)
-       (set-error! (string-append "connect.hx: " (request-error-message req)))]
-      [else (execute-request req)])))
+  (run-blocks (blocks-under-cursor) "under the cursor"))
 
+;;@doc
+;; Execute every request the selection touches.
+;;
+;; Overlap, not containment: a selection clipping one line of a request runs the
+;; whole of it, since running a fragment is never what was meant.
+(define (connect-exec-selection)
+  (run-blocks (blocks-in-selection) "in the selection"))
+
+;;@doc
+;; Execute every request in the buffer, top to bottom.
+;;
+;; One request blocks the editor thread; a buffer of them blocks it for their
+;; total time, with the timeout bounding each. Worth knowing before pointing it
+;; at a file of slow endpoints.
+(define (connect-exec-buffer)
+  (run-blocks (split-blocks (buffer-text)) "in the buffer"))
+
+(define (buffer-text)
+  (text.rope->string (editor->text (editor->doc-id (editor-focus)))))
+
+(define (blocks-under-cursor)
+  (let* ([text (buffer-text)]
+         [block (block-at-line (split-blocks text) (char-offset->line text (cursor-position)))])
+    (if block (list block) '())))
+
+;; The selection's char offsets mapped to lines, then to the blocks they touch.
+;; Every range is used, not just the primary, so a multi-cursor selection runs
+;; everything it covers.
+(define (blocks-in-selection)
+  (let* ([text (buffer-text)]
+         [blocks (split-blocks text)]
+         [ranges (helix.static.selection->ranges (helix.static.current-selection-object))])
+    (transduce ranges
+               (flat-mapping
+                (lambda (range)
+                  (blocks-in-line-range blocks
+                                        (char-offset->line text (helix.static.range->from range))
+                                        (char-offset->line text (helix.static.range->to range)))))
+               (into-list))))
+
+;; Parse and run BLOCKS in order, reporting a summary.
+;;
+;; Variables always come from the WHOLE buffer, never from the blocks being run:
+;; `@base` lives at the top of the file and a selection almost never includes
+;; it.
+;;
+;; A block that holds no request is skipped in silence -- the `@`-declaration
+;; preamble and comment-only blocks are not requests and saying so for each
+;; would be noise. A block whose request is malformed is counted as failed.
+;;
+;; A failure does not stop the run. The point of executing several is to see all
+;; of their results, and stopping at the first would throw away the rest; a
+;; non-2xx is not even a failure here, just a response with an error body.
+(define (run-blocks blocks where)
+  (let ([vars (resolve-variables (parse-variables (buffer-text)))])
+    (let loop ([bs blocks] [ran 0] [failed 0] [last-status ""])
+      (if (null? bs)
+          (report-run ran failed last-status where)
+          (let ([req (parse-request (block-lines (car bs)) vars)])
+            (cond
+              [(not req) (loop (cdr bs) ran failed last-status)]
+              [(request-error? req)
+               (set-error! (string-append "connect.hx: " (request-error-message req)))
+               (loop (cdr bs) ran (+ failed 1) last-status)]
+              [else
+               (let ([status (execute-request req)])
+                 (loop (cdr bs)
+                       (+ ran 1)
+                       (if status failed (+ failed 1))
+                       (if status status last-status)))]))))))
+
+;; One request reports its own status line; several report a tally, since the
+;; individual ones would all overwrite each other anyway.
+(define (report-run ran failed last-status where)
+  (cond
+    [(and (= ran 0) (= failed 0))
+     (set-error! (string-append "connect.hx: no request " where))]
+    [(= (+ ran failed) 1)
+     (when (> (string-length last-status) 0) (set-status! last-status))]
+    [else
+     (set-status! (string-append "connect.hx: ran "
+                                 (to-string ran)
+                                 " request"
+                                 (if (= ran 1) "" "s")
+                                 (if (> failed 0)
+                                     (string-append ", " (to-string failed) " failed")
+                                     "")))]))
+
+;; Run REQ and append its response. Returns the status line on success, or
+;; #false when curl itself failed -- which is what the caller counts.
 (define (execute-request req)
   (let* ([started (instant/now)]
          [result (run-argv "curl"
@@ -329,7 +409,8 @@
       [(hash-ref result 'timed-out)
        (set-error! (string-append "connect.hx: timed out after "
                                   (to-string (/ (state-ref 'timeout-ms) 1000))
-                                  "s"))]
+                                  "s"))
+       #false]
       ;; A non-2xx is NOT a failure here -- curl exits 0 and the body carries
       ;; the Connect error. A non-zero exit means curl itself failed: DNS,
       ;; connection refused, TLS.
@@ -337,20 +418,20 @@
        (set-error! (string-append "connect.hx: curl failed (exit "
                                   (to-string (hash-ref result 'exit))
                                   "): "
-                                  (trim (hash-ref result 'stderr))))]
+                                  (trim (hash-ref result 'stderr))))
+       #false]
       [else
        (let* ([split (split-headers-body (hash-ref result 'stdout))]
               [headers (car split)]
               [body (cdr split)])
-         (state-set! (quote request-count) (+ 1 (state-ref (quote request-count))))
+         (state-set! 'request-count (+ 1 (state-ref 'request-count)))
          (append-response!
-          (format-response req headers body elapsed (state-ref (quote request-count))))
-         (set-status! (string-append "connect.hx: "
-                                     (trim (car (split-many headers "\n")))
-                                     " in "
-                                     (to-string elapsed)
-                                     "ms")))])))
-
+          (format-response req headers body elapsed (state-ref 'request-count)))
+         (string-append "connect.hx: "
+                        (trim (car (split-many headers "\n")))
+                        " in "
+                        (to-string elapsed)
+                        "ms"))])))
 ;;@doc
 ;; Empty the *connect* buffer.
 (define (connect-clear)
@@ -392,4 +473,6 @@
 (define (install-bindings-for-extension! ext)
   (keymap (extension ext (inherit-from (deep-copy-global-keybindings)))
           (normal (space (H (c ":connect-exec")
+                            (s ":connect-exec-selection")
+                            (b ":connect-exec-buffer")
                             (x ":connect-clear"))))))
