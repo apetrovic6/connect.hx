@@ -42,7 +42,7 @@ list:
 
 ```nix
 # flake.nix
-inputs.connect-hx.url = "github:apetrovic/connect.hx";
+inputs.connect-hx.url = "github:apetrovic6/connect.hx";
 
 # wherever the plugin list lives
 selectPlugins = p: [
