@@ -342,15 +342,42 @@ the shape http.hx established -- it works and there is no reason to be novel.
 Focus returns to the request buffer after rendering: the response is to be read,
 not edited.
 
-Each response **replaces** the buffer rather than appending to it. An
-append-only log puts the newest result off-screen exactly when it matters; the
-request line stays in the header so it is never ambiguous which call produced
-what.
+Each response is **appended**, so a sequence of calls can be compared against
+each other. Entries are numbered and separated by a rule; `:connect-clear`
+empties the log and resets the counter.
 
+The append is done by rewriting the buffer with old + new rather than seeking
+to the end and inserting there, which looks wasteful and is not. `select_all`
+followed by `delete_selection` is the only sequence found that survives the
+first write into a newly created buffer. Every seek-based variant tried --
+`goto_file_end`, `collapse_selection`, and the typed `:goto`, each with and
+without `enqueue-thread-local-callback` -- builds a transaction whose positions
+still belong to the *request* buffer and applies it to the 1-character response
+document, which **panics helix** rather than erroring:
+
+```
+thread 'main' panicked at helix-core/src/transaction.rs:509:
+Positions [(586, AfterSticky), (587, BeforeSticky)] are out of range for
+changeset len 1!
+```
+
+`editor-set-focus!` does not reconcile the incoming view's selection with the
+document; `select_all` does, by rewriting the selection against the document
+actually being edited. That is why http.hx opens with the same two calls, and
+it is worth knowing before "optimising" this into an insert-at-end.
+
+Deferring through `enqueue-thread-local-callback` does NOT substitute for it --
+tested, still panics. Note the typed `:goto` panics here even though the static
+commands around it are fine, so view positioning after a write is limited to
+`helix/static.scm` commands.
+
+Known rough edge: the view lands at the bottom of the buffer, so a long
+response scrolls its own header off screen. Putting the cursor at the top of
+the new entry is what `:goto` was for, and it is currently unavailable.
 The rendered shape, as implemented:
 
 ```markdown
-# POST https://demo.connectrpc.com/connectrpc.eliza.v1.ElizaService/Say
+# 1 · POST https://demo.connectrpc.com/connectrpc.eliza.v1.ElizaService/Say
 
 `HTTP/2 200`  ·  309ms
 
@@ -358,16 +385,22 @@ The rendered shape, as implemented:
 {"sentence":"Hello there...how are you today?"}
 ```
 
-<details>
-<summary>response headers</summary>
+## response headers
+
+```
+HTTP/2 200
+content-type: application/json
 ...
-</details>
+```
+
+---
 ```
 
 The body is fenced as `json` when the response Content-Type says so, which is
-what gives it highlighting inside the markdown buffer. Response headers go in a
-`<details>` block -- present without being in the way, and no toggle command to
-implement.
+what gives it highlighting inside the markdown buffer. Response headers get a
+plain heading, NOT an HTML `<details>` block: helix renders a markdown buffer as
+text, so `<details>` collapses nothing and only adds literal tag noise to the
+output.
 
 Connect-specific: on a non-2xx, `code` and `message` are lifted out of the error
 envelope into the status line (`` `HTTP/2 400` -- **invalid_argument: ...** ``),

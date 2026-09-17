@@ -17,12 +17,16 @@
 (require (prefix-in helix. "helix/commands.scm"))
 (require (prefix-in helix.static. "helix/static.scm"))
 (require "helix/editor.scm")
-(require (only-in "helix/misc.scm" set-status! set-error! cursor-position))
+(require (only-in "helix/misc.scm"
+                  set-status!
+                  set-error!
+                  cursor-position
+                  enqueue-thread-local-callback))
 
 (provide connect-doctor
          connect-exec
-         connect-set-timeout)
-(provide connect-doctor)
+         connect-set-timeout
+         connect-clear)
 
 ;; How long a probe may take before it is treated as a missing binary. Short:
 ;; `command -v` either answers immediately or something is badly wrong, and
@@ -81,7 +85,7 @@
 
 ;; A box rather than a struct: the only mutable state is the response buffer's
 ;; doc-id and the timeout, and a box keeps the update sites obvious.
-(define client-state (box (hash 'buffer-id #false 'timeout-ms 30000)))
+(define client-state (box (hash 'buffer-id #false 'timeout-ms 30000 'request-count 0)))
 
 (define (state-ref key) (hash-ref (unbox client-state) key))
 
@@ -114,23 +118,47 @@
             (editor-set-focus! origin)
             new-id)))))
 
-;; Replace the *connect* buffer's contents with TEXT.
+;; Append TEXT to the *connect* buffer and scroll the new entry into view.
 ;;
-;; Replace rather than append: a response is read, not accumulated, and an
-;; append-only log means the newest result is off-screen exactly when it
-;; matters. The request line stays in the header so it is never ambiguous
-;; which call produced what.
-(define (write-response! text)
+;; Append rather than replace, so a sequence of calls can be compared against
+;; each other -- which is most of what this is for. `:connect-clear` wipes the
+;; log when it gets long.
+;;
+;; The append is done by rewriting the buffer with old + new rather than by
+;; seeking to the end and inserting there. That looks wasteful and is
+;; deliberate: `select_all` followed by `delete_selection` is the only sequence
+;; observed to survive the first write into a newly created buffer. Seeking
+;; instead -- with `goto_file_end`, or `collapse_selection`, deferred through
+;; enqueue-thread-local-callback or not -- builds a transaction whose positions
+;; still belong to the request buffer and applies it to the 1-character
+;; response document, panicking helix outright rather than erroring:
+;;   Positions [(586, AfterSticky), (587, BeforeSticky)] are out of range for
+;;   changeset len 1!  (helix-core/src/transaction.rs:509)
+;; select_all rewrites the selection against the document actually being
+;; edited, which is what makes it safe; http.hx opens with the same two calls.
+;; The buffer is a session-local log of small responses, so rewriting it costs
+;; nothing worth optimising.
+;;
+;; The cursor then goes to the top of the newly appended entry rather than the
+;; end of the buffer: a long response would otherwise scroll its own header off
+;; screen, and that header is the line saying which call this was. `goto` is
+;; 1-indexed and the count is of the lines already present, so it addresses the
+;; first line of what was just added.
+(define (append-response! text)
   (let ([doc-id (ensure-response-buffer)]
         [origin (editor-focus)])
     (let ([view (editor-doc-in-view? doc-id)])
       (when view
-        (editor-set-focus! view)
-        (helix.static.select_all)
-        (helix.static.delete_selection)
-        (helix.static.insert_string text)
-        (helix.static.goto_file_start)
-        (editor-set-focus! origin)))))
+        (let* ([existing (text.rope->string (editor->text doc-id))]
+               [existing (if (= (string-length (trim existing)) 0) "" existing)]
+               [line-count (length (split-many existing "\n"))])
+          (editor-set-focus! view)
+          (helix.static.select_all)
+          (helix.static.delete_selection)
+          (helix.static.insert_string (string-append existing text))
+          (helix.static.goto_file_end)
+          (helix.static.align_view_bottom)
+          (editor-set-focus! origin))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Response formatting
@@ -234,22 +262,22 @@
                          (+ (string-length (car parts)) (string-length delim))
                          (string-length line))))))
 
-(define (format-response req headers body elapsed-ms)
+(define (format-response req headers body elapsed-ms index)
   (let* ([code (status-code headers)]
          [status-line (trim (car (split-many headers "\n")))]
          [error-summary (if (success-status? code) #false (connect-error-summary body))]
          [content-type (header-value headers "content-type")])
     (string-append
-     "# " (request-method req) " " (request-url req) "\n\n"
+     "# " (to-string index) " · " (request-method req) " " (request-url req) "\n\n"
      "`" status-line "`"
      (if error-summary (string-append " -- **" error-summary "**") "")
      "  ·  " (to-string elapsed-ms) "ms\n\n"
      (if (= (string-length (trim body)) 0)
          "_(empty body)_\n"
          (fence (trim body) content-type))
-     "\n<details>\n<summary>response headers</summary>\n\n"
+     "\n## response headers\n\n"
      (fence (trim headers) #false)
-     "</details>\n")))
+     "\n---\n\n")))
 
 ;; ---------------------------------------------------------------------------
 ;; Commands
@@ -314,9 +342,29 @@
        (let* ([split (split-headers-body (hash-ref result 'stdout))]
               [headers (car split)]
               [body (cdr split)])
-         (write-response! (format-response req headers body elapsed))
+         (state-set! (quote request-count) (+ 1 (state-ref (quote request-count))))
+         (append-response!
+          (format-response req headers body elapsed (state-ref (quote request-count))))
          (set-status! (string-append "connect.hx: "
                                      (trim (car (split-many headers "\n")))
                                      " in "
                                      (to-string elapsed)
                                      "ms")))])))
+
+;;@doc
+;; Empty the *connect* buffer.
+;;
+;; Responses accumulate, so this is the reset. The request counter goes back to
+;; zero with the log it numbers -- leaving it running would label the first
+;; entry of an empty buffer "# 7", which reads like something is missing.
+(define (connect-clear)
+  (let ([doc-id (ensure-response-buffer)]
+        [origin (editor-focus)])
+    (let ([view (editor-doc-in-view? doc-id)])
+      (when view
+        (editor-set-focus! view)
+        (helix.static.select_all)
+        (helix.static.delete_selection)
+        (editor-set-focus! origin)))
+    (state-set! 'request-count 0)
+    (set-status! "connect.hx: cleared")))

@@ -72,6 +72,10 @@ produces a byte-identical store path is the symptom.
 | `:connect-doctor` | reports which executors are on PATH |
 | `:connect-exec` | execute the request under the cursor into `*connect*` |
 | `:connect-set-timeout [seconds]` | set or show the request timeout (default 30s) |
+| `:connect-clear` | empty the `*connect*` log and reset entry numbering |
+
+Responses are appended and numbered, so successive calls can be compared; use
+`:connect-clear` when the log gets long.
 
 ## Licence
 
