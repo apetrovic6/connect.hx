@@ -91,7 +91,8 @@
 
 ;; A box rather than a struct: the only mutable state is the response buffer's
 ;; doc-id and the timeout, and a box keeps the update sites obvious.
-(define client-state (box (hash 'buffer-id #false 'timeout-ms 30000 'request-count 0)))
+(define client-state
+  (box (hash 'buffer-id #false 'timeout-ms 30000 'request-count 0 'buf-available 'unknown)))
 
 (define (state-ref key) (hash-ref (unbox client-state) key))
 
@@ -268,6 +269,24 @@
                          (+ (string-length (car parts)) (string-length delim))
                          (string-length line))))))
 
+;; buf has no HTTP status or headers to show, so this is the method, the timing
+;; and the payload -- the response on success, the Failure message on error.
+(define (format-buf-response req text elapsed-ms index ok)
+  (string-append "# " (to-string index) " . " (request-url req) "\n\n"
+                 "`buf curl`"
+                 (if ok "" " -- **failed**")
+                 "  . " (to-string elapsed-ms) "ms\n\n"
+                 (if (= (string-length text) 0)
+                     "_(no output)_\n"
+                     (fence text (if ok "application/json" #false)))
+                 "\n---\n\n"))
+
+(define (first-line s) (trim (car (split-many s "\n"))))
+
+(define (next-index!)
+  (state-set! 'request-count (+ 1 (state-ref 'request-count)))
+  (state-ref 'request-count))
+
 (define (format-response req headers body elapsed-ms index)
   (let* ([code (status-code headers)]
          [status-line (trim (car (split-many headers "\n")))]
@@ -367,7 +386,7 @@
                (set-error! (string-append "connect.hx: " (request-error-message req)))
                (loop (cdr bs) ran (+ failed 1) last-status)]
               [else
-               (let ([status (execute-request req)])
+               (let ([status (execute-request req (choose-executor req (block-lines (car bs))) vars)])
                  (loop (cdr bs)
                        (+ ran 1)
                        (if status failed (+ failed 1))
@@ -390,9 +409,74 @@
                                      (string-append ", " (to-string failed) " failed")
                                      "")))]))
 
+;; Which executor runs REQ: "buf" or "curl".
+;;
+;; A `>>` request goes to buf when buf is installed, because that is where the
+;; schema buys anything -- request validation before sending, decoded streaming
+;; frames, readable error details. Everything else goes to curl: longhand means
+;; the headers were written by hand and raw HTTP is what was wanted, and plain
+;; REST is not buf's job at all.
+;;
+;; A `# @executor` directive in the block overrides both, which is the escape
+;; hatch for a server with no reflection and no @schema -- buf cannot call what
+;; it has no descriptor for, and curl can.
+(define (choose-executor req lines)
+  (let ([declared (block-executor lines)])
+    (cond
+      [(equal? declared "curl") "curl"]
+      [(equal? declared "buf") "buf"]
+      [(and (request-connect? req) (buf-available?)) "buf"]
+      [else "curl"])))
+
+;; Cached: `command -v` per request would be a process spawn on the editor
+;; thread for an answer that cannot change mid-session.
+(define (buf-available?)
+  (let ([cached (state-ref 'buf-available)])
+    (if (equal? cached 'unknown)
+        (let ([found (binary-available? "buf")])
+          (state-set! 'buf-available found)
+          found)
+        cached)))
+
 ;; Run REQ and append its response. Returns the status line on success, or
-;; #false when curl itself failed -- which is what the caller counts.
-(define (execute-request req)
+;; #false on failure -- which is what the caller counts.
+(define (execute-request req executor vars)
+  (if (equal? executor "buf")
+      (execute-with-buf req vars)
+      (execute-with-curl req)))
+
+;; buf reports failure on stderr as `Failure: <message>` with a non-zero exit,
+;; and much of what it catches never reaches the network -- an unknown field or
+;; a method absent from the schema is rejected client-side. There is therefore
+;; no HTTP status to show, and a failure is a real failure rather than curl's
+;; "a non-2xx is still a response".
+(define (execute-with-buf req vars)
+  (let* ([schema (let ([declared (assoc "schema" vars)]) (if declared (cdr declared) #false))]
+         [started (instant/now)]
+         [result (run-argv "buf"
+                           (buf-curl-argv (request-url req)
+                                          (request-headers req)
+                                          (request-body req)
+                                          schema)
+                           (hash 'timeout-ms (state-ref 'timeout-ms)))]
+         [elapsed (duration->millis (instant/elapsed started))])
+    (cond
+      [(hash-ref result 'timed-out)
+       (set-error! (string-append "connect.hx: buf timed out after "
+                                  (to-string (/ (state-ref 'timeout-ms) 1000))
+                                  "s"))
+       #false]
+      [(not (hash-ref result 'ok))
+       (let ([message (trim (hash-ref result 'stderr))])
+         (append-response! (format-buf-response req message elapsed (next-index!) #false))
+         (set-error! (string-append "connect.hx: " (first-line message)))
+         #false)]
+      [else
+       (append-response!
+        (format-buf-response req (trim (hash-ref result 'stdout)) elapsed (next-index!) #true))
+       (string-append "connect.hx: buf ok in " (to-string elapsed) "ms")])))
+
+(define (execute-with-curl req)
   (let* ([started (instant/now)]
          [result (run-argv "curl"
                            (request->curl-argv req)
@@ -417,9 +501,8 @@
        (let* ([split (split-headers-body (hash-ref result 'stdout))]
               [headers (car split)]
               [body (cdr split)])
-         (state-set! 'request-count (+ 1 (state-ref 'request-count)))
          (append-response!
-          (format-response req headers body elapsed (state-ref 'request-count)))
+          (format-response req headers body elapsed (next-index!)))
          (string-append "connect.hx: "
                         (trim (car (split-many headers "\n")))
                         " in "

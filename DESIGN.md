@@ -308,10 +308,26 @@ Two backends behind one interface, chosen per request.
 | Error `details` | opaque | decodable |
 | Arbitrary HTTP | yes | no |
 
-`curl` is the default and the only hard dependency: the plugin must be useful
-on a machine without buf, and plain HTTP requests in the same file need it
-anyway. `buf curl` is selected when available and when the request is a
-Connect method call.
+`curl` is the default and the only hard dependency: the plugin must be useful on
+a machine without buf, and plain HTTP requests in the same file need it anyway.
+
+**The rule, as implemented:** a `>>` request goes to buf when buf is on PATH.
+Everything else goes to curl -- longhand means the headers were written by hand
+and raw HTTP is what was wanted, and plain REST is not buf's job. A
+`# @executor buf|curl` directive in the block overrides both, which is the
+escape hatch for a server with no reflection: buf cannot call what it has no
+descriptor for. `@schema` is passed to `--schema` for that case.
+
+The two paths report differently, and have to. curl gives an HTTP status and
+headers, and a non-2xx is still a response carrying an error body. buf has
+neither status nor headers, and much of what it catches never reaches the
+network at all -- an unknown field or a method absent from the schema is
+rejected client-side, arriving as `Failure: <message>` on stderr with a non-zero
+exit. So a buf failure is a real failure, and is counted as one.
+
+Connect headers are stripped before handing a request to buf: it sets the
+protocol and content type itself, and `Connect-Protocol-Version` sent twice is a
+400.
 
 `:connect-doctor` (implemented) reports which are present.
 
@@ -453,8 +469,10 @@ the blocking version proves annoying in practice.
 - **2. Shorthand and ergonomics.** *(done)* The `>>` form, execute-selection and
   execute-buffer, and keybindings under `space H` scoped to .http/.connect.
   (`@base` and cursor-based block selection landed in milestone 1.)
-- **3. `buf curl` executor.** Selected when buf is present; unlocks streaming,
-  validation and decoded errors at once.
+- **3. `buf curl` executor.** *(done)* Chosen for `>>` requests when buf is on
+  PATH; unlocked streaming, client-side validation and readable errors at once.
+  `# @executor curl` forces the other way, `@schema` supplies descriptors when
+  the server has no reflection.
 - **4. Method discovery.** `--list-methods` into a picker.
 - **5. Request scaffolding.** Descriptor set to skeleton body. The biggest
   single ergonomic win, and the point at which this stops being "an http client

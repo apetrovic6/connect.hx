@@ -116,6 +116,27 @@ pins the input by narHash: editing this repo does **not** affect a rebuild of
 the consumer until `nix flake update connect-hx` is run there. A rebuild that
 produces a byte-identical store path is the symptom.
 
+## Executors
+
+A `>>` request runs through `buf curl` when buf is on PATH, and through `curl`
+otherwise. Longhand requests always use curl -- writing the headers by hand
+means raw HTTP is what you wanted.
+
+buf is worth having: it validates the body against the schema and rejects
+unknown fields *before sending* (curl gets an HTTP 200 and the field silently
+dropped), decodes streaming responses (curl shows the raw envelope framing), and
+renders error details.
+
+```http
+### force this one onto curl -- e.g. a server with no reflection
+# @executor curl
+>> pkg.Service/Method
+{}
+```
+
+`@schema = ./proto` is passed to `buf curl --schema` for servers that do not
+serve reflection. `:connect-doctor` reports which executors are available.
+
 ## Commands
 
 | Command | Status |

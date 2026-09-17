@@ -9,8 +9,7 @@
          method-ref->path
          connect-url
          connect-headers
-         curl-argv
-         buf-curl-argv)
+         curl-argv)
 
 ;; The Connect protocol version header. Required on unary requests by servers
 ;; that enforce it, and harmless on ones that do not -- always send it.
@@ -76,17 +75,27 @@
 
 ;; Build argv for the schema-aware executor.
 ;;
-;; With no `--schema` flag buf falls back to server reflection, which is the
-;; common case for a service you are developing against. Unlike curl, this
-;; validates the request body against the descriptor and rejects unknown
-;; fields client-side, and it decodes streaming responses.
-(define (buf-curl-argv url body schema)
+;; Without `--schema` buf uses server reflection, which is the common case for a
+;; service you are developing against. Unlike curl it validates the body against
+;; the descriptor, rejects unknown fields before sending, and decodes streaming
+;; responses.
+;;
+;; The Connect headers are NOT passed: buf sets the protocol and content type
+;; itself, and `Connect-Protocol-Version` given twice is a 400.
+(define (buf-curl-argv url headers body schema)
   (append (list "curl" "--protocol" "connect")
-          (if (string? schema) (list "--schema" schema) '())
+          (if (and (string? schema) (> (string-length schema) 0))
+              (list "--schema" schema)
+              '())
+          (flatten-headers (filter (lambda (h) (not (connect-header? (car h)))) headers))
           (if (and (string? body) (> (string-length body) 0))
               (list "-d" body)
               '())
           (list url)))
+
+(define (connect-header? name)
+  (let ([lowered (string-downcase name)])
+    (or (equal? lowered "content-type") (equal? lowered "connect-protocol-version"))))
 
 ;; ("A" . "b") ... -> ("-H" "A: b" ...)
 (define (flatten-headers headers)
@@ -114,6 +123,8 @@
          block-last-line
          block-at-line
          blocks-in-line-range
+         block-executor
+         buf-curl-argv
          char-offset->line
          parse-request
          request-error?
@@ -438,3 +449,32 @@
             (and (<= (block-first-line b) to-line)
                  (>= (block-last-line b) from-line)))
           blocks))
+
+;; `# @executor buf` / `# @executor curl` inside a block, overriding the default
+;; choice. Returns "buf", "curl", or #false when the block says nothing.
+;;
+;; Needed because buf can only run what it has a schema for: a server without
+;; reflection, and no `@schema`, leaves curl as the only way to call it.
+(define (block-executor lines)
+  (let loop ([ls lines])
+    (cond
+      [(null? ls) #false]
+      [else
+       (let ([directive (parse-directive (car ls) "executor")])
+         (if (and directive (or (equal? directive "buf") (equal? directive "curl")))
+             directive
+             (loop (cdr ls))))])))
+
+;; `# @name value` -> "value", or #false. The `#` keeps directives inside
+;; comments, so a file full of them still reads as valid .http to other tools.
+(define (parse-directive line name)
+  (let ([t (trim line)])
+    (if (not (starts-with? t "#"))
+        #false
+        (let ([rest (trim (substring t 1 (string-length t)))])
+          (if (not (starts-with? rest (string-append "@" name)))
+              #false
+              (let ([value (trim (substring rest
+                                            (+ 1 (string-length name))
+                                            (string-length rest)))])
+                (if (= (string-length value) 0) #false value)))))))

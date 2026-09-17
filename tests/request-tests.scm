@@ -66,11 +66,13 @@
         #false)
 
 (check! "buf-curl-argv uses reflection when no schema is given"
-        (member "--schema" (buf-curl-argv "http://x/pkg.Svc/M" "{}" #false))
+        (member "--schema" (buf-curl-argv "http://x/pkg.Svc/M" '() "{}" #false))
         #false)
 
 (check! "buf-curl-argv passes a schema when one is given"
-        (if (member "--schema" (buf-curl-argv "http://x/pkg.Svc/M" "{}" "./proto")) #true #false)
+        (if (member "--schema" (buf-curl-argv "http://x/pkg.Svc/M" '() "{}" "./proto"))
+            #true
+            #false)
         #true)
 
 (displayln "all request tests passed")
@@ -304,3 +306,60 @@
         3)
 
 (displayln "all block range tests passed")
+
+;; ---------------------------------------------------------------------------
+;; buf executor
+;; ---------------------------------------------------------------------------
+
+;; buf sets the protocol and content type itself, and Connect-Protocol-Version
+;; sent twice is a 400.
+(check! "buf-curl-argv drops the connect headers"
+        (member "Connect-Protocol-Version: 1"
+                (buf-curl-argv "http://x/p.S/M"
+                               (list (cons "Connect-Protocol-Version" "1")
+                                     (cons "Content-Type" "application/json"))
+                               "{}"
+                               #false))
+        #false)
+
+(check! "buf-curl-argv keeps other headers"
+        (if (member "Authorization: Bearer t"
+                    (buf-curl-argv "http://x/p.S/M"
+                                   (list (cons "Authorization" "Bearer t"))
+                                   "{}"
+                                   #false))
+            #true
+            #false)
+        #true)
+
+(check! "buf-curl-argv speaks connect" 
+        (if (member "connect" (buf-curl-argv "http://x/p.S/M" '() "{}" #false)) #true #false)
+        #true)
+
+(check! "buf-curl-argv ignores an empty schema"
+        (member "--schema" (buf-curl-argv "http://x/p.S/M" '() "{}" ""))
+        #false)
+
+(check! "block-executor reads a curl directive"
+        (block-executor (list "### one" "# @executor curl" ">> p.S/M"))
+        "curl")
+
+(check! "block-executor reads a buf directive"
+        (block-executor (list "# @executor buf" ">> p.S/M"))
+        "buf")
+
+(check! "block-executor ignores an unknown executor"
+        (block-executor (list "# @executor wget" ">> p.S/M"))
+        #false)
+
+(check! "block-executor is #false when nothing is declared"
+        (block-executor (list "### one" ">> p.S/M"))
+        #false)
+
+;; The directive lives inside a comment so the file still reads as .http to
+;; anything else.
+(check! "a directive is not mistaken for a plain comment"
+        (block-executor (list "# just a comment" "# @executor curl"))
+        "curl")
+
+(displayln "all buf executor tests passed")
