@@ -167,22 +167,22 @@
           ;; Back to the top, via the SELECTION rather than a goto.
           ;;
           ;; insert_string leaves the cursor at the end of what it wrote, and
-          ;; the view scrolls with it, so the entry header ends up above the top
-          ;; of the pane. goto_file_start does not bring it back -- neither
-          ;; inline nor deferred -- but select_all does reliably work here, and
-          ;; flipping it puts the head at position 0 for collapse_selection to
-          ;; land on.
+          ;; the view scrolls with it. Flipping a select_all puts the head at 0 so
+          ;; collapse_selection lands there.
+          ;;
+          ;; KNOWN BUG: this fixes the cursor but not the scroll. The pane keeps
+          ;; the offset it took when the cursor was at the end of the insert, so
+          ;; a response taller than the pane hides its own header until you
+          ;; focus the pane, at which point Editor::focus -> ensure_cursor_in_view
+          ;; snaps it to the top. Six fixes failed: goto_file_start inline and
+          ;; deferred, align_view_top, a delayed focus restore so a frame renders
+          ;; while focused, and focusing away and back to re-trigger
+          ;; ensure_cursor_in_view. The status line names the method as a
+          ;; stopgap.
           (helix.static.select_all)
           (helix.static.flip_selections)
           (helix.static.collapse_selection)
-          (helix.static.align_view_top)
-          ;; Focus goes back in a LATER callback, not here. helix only keeps the
-          ;; cursor in view for the focused view, so the pane has to still be
-          ;; focused when the next frame renders -- otherwise it keeps the
-          ;; offset it took when the cursor was at the end of the insert, and
-          ;; the entry header sits above the top of the pane with the cursor
-          ;; correctly at 1:1 underneath it.
-          (enqueue-thread-local-callback (lambda () (editor-set-focus! origin))))))))
+          (editor-set-focus! origin))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Response formatting
