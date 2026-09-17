@@ -58,17 +58,20 @@ module, or the commands will not be registered:
 (require "connect.hx/connect-client.scm")
 ```
 
-Optionally bind the commands under `space c`:
+Optionally bind the commands under `space H`:
 
 ```scheme
 (connect-install-keybindings!)
 ```
 
-Binding from steel rather than from `config.toml` is what gets you hints in the
-space-menu popup: that path attaches each command's `@doc` string to the keymap.
-A keymap written in the editor config cannot supply that text -- helix skips
-`KeyTrieNode`'s label when deserialising, so a config-defined submenu renders
-with a blank description.
+The bindings are scoped to `.connect` and `.http` files -- helix selects a
+keymap by the focused file's extension -- so `space H` stays free everywhere
+else. Each extension map inherits a copy of the global keymap, which is what
+keeps the rest of your bindings working inside those files.
+
+Binding from steel rather than `config.toml` is also what gets you hints in the
+keymap popup: that path attaches each command's `@doc` string. A steel command
+bound from the editor config shows "Undocumented plugin command" instead.
 
 Verify with `:connect-doctor`, which reports which executors are on PATH.
 

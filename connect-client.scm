@@ -365,29 +365,24 @@
 ;; Keybindings
 ;; ---------------------------------------------------------------------------
 
+;; File extensions that get the connect.hx bindings.
+(define binding-extensions (list "connect" "http"))
+
 ;;@doc
-;; Bind the connect.hx commands under `space c` in normal mode.
+;; Bind the connect.hx commands under `space H`, in .connect and .http files
+;; only.
 ;;
-;; Offered as a function rather than done at load, so the decision stays with
-;; the config: requiring this module gets you the commands, calling this gets
-;; you the keys.
-;;
-;; Worth doing from here rather than from config.toml/keybinds.nix, because
-;; only this path carries documentation. `merge-keybindings` calls
-;; `keymap-update-documentation!` with the `@doc` string of every bound
-;; command, which is what the space-menu popup then shows. A keymap written in
-;; the editor config cannot supply that text at all: `KeyTrieNode.name` is
-;; `#[serde(skip)]`, so a config-defined submenu deserialises with an empty
-;; label and the popup row comes up blank.
-;;
-;; Registration is deferred into a callback: an error raised while init.scm is
-;; still running aborts the require in progress, and every command in this file
-;; would then silently fail to register -- surfacing much later as "free
-;; identifier: connect-exec", nowhere near the actual mistake. Same reasoning as
-;; the oil keymap.
+;; Scoped per extension rather than globally: helix picks the keymap by the
+;; focused file's extension, so `space H` stays free everywhere else. Each map
+;; inherits a copy of the global one, which is what keeps every other binding
+;; working inside these files -- a partial map would swallow `space` and strand
+;; the sequences it does not define.
 (define (connect-install-keybindings!)
   (enqueue-thread-local-callback
    (lambda ()
-     (keymap (global)
-             (normal (space (C (c ":connect-exec")
-                               (x ":connect-clear"))))))))
+     (for-each install-bindings-for-extension! binding-extensions))))
+
+(define (install-bindings-for-extension! ext)
+  (keymap (extension ext (inherit-from (deep-copy-global-keybindings)))
+          (normal (space (H (c ":connect-exec")
+                            (x ":connect-clear"))))))
