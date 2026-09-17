@@ -460,10 +460,16 @@ the schema work is then informed by actual use rather than speculation.
   Registering a new type means another grammar problem; reusing `.http` means
   http.hx and connect.hx would both claim the same buffers if both are
   installed.
-- Helix ships no `http` tree-sitter grammar (confirmed: nothing matching in the
-  runtime `grammars/` or `queries/`). Highlighting requires packaging
-  `rest-nvim/tree-sitter-http` separately. Worth doing once the format settles,
-  not before.
+- ~~Helix ships no `http` tree-sitter grammar.~~ Done, in the magos config:
+  `rest-nvim/tree-sitter-http` (packaged in nixpkgs as
+  `tree-sitter-grammars.tree-sitter-http`) installed into an additive
+  `HELIX_RUNTIME` dir holding just `grammars/http.so` and `queries/http/`, with
+  a `[[language]]` entry claiming `.http` and `.connect`. Two things to know if
+  this is ever repackaged: helix searches every runtime dir and takes the first
+  hit, so an additive dir does not shadow the stock one; and the shipped
+  queries are neovim's, so the nvim-only `#offset!` predicate has to be
+  stripped or helix rejects the whole file ("unknown predicate", and with it
+  every injection).
 
 ---
 
