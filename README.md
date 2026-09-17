@@ -58,16 +58,18 @@ module, or the commands will not be registered:
 (require "connect.hx/connect-client.scm")
 ```
 
-Optionally bind the commands under `space H`:
+Optionally bind `:connect-exec` to `space H`:
 
 ```scheme
 (connect-install-keybindings!)
 ```
 
-The bindings are scoped to `.connect` and `.http` files -- helix selects a
+The binding is scoped to `.connect` and `.http` files -- helix selects a
 keymap by the focused file's extension -- so `space H` stays free everywhere
-else. Each extension map inherits a copy of the global keymap, which is what
-keeps the rest of your bindings working inside those files.
+else. It is bound as a leaf so the space menu actually lists it; a submenu has
+no name and helix renders no row for one. Each extension map inherits a copy of
+the global keymap, which keeps
+the rest of your bindings working inside those files.
 
 Binding from steel rather than `config.toml` is also what gets you hints in the
 keymap popup: that path attaches each command's `@doc` string. A steel command

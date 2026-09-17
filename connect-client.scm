@@ -369,14 +369,14 @@
 (define binding-extensions (list "connect" "http"))
 
 ;;@doc
-;; Bind the connect.hx commands under `space H`, in .connect and .http files
-;; only.
+;; Bind :connect-exec to `space H` in .connect and .http files.
 ;;
-;; Scoped per extension rather than globally: helix picks the keymap by the
-;; focused file's extension, so `space H` stays free everywhere else. Each map
-;; inherits a copy of the global one, which is what keeps every other binding
-;; working inside these files -- a partial map would swallow `space` and strand
-;; the sequences it does not define.
+;; A leaf, not a submenu: a user-defined submenu has no name and helix renders
+;; no row for it, so a grouped binding works but is never listed in the menu.
+;;
+;; The inherit-from is load-bearing. Helix falls back to the global keymap only
+;; on a miss, and a map holding just `space H` would match `space` and strand
+;; every other sequence under it inside these files.
 (define (connect-install-keybindings!)
   (enqueue-thread-local-callback
    (lambda ()
@@ -384,5 +384,4 @@
 
 (define (install-bindings-for-extension! ext)
   (keymap (extension ext (inherit-from (deep-copy-global-keybindings)))
-          (normal (space (H (c ":connect-exec")
-                            (x ":connect-clear"))))))
+          (normal (space (H ":connect-exec")))))
