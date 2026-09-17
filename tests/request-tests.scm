@@ -565,3 +565,57 @@
         1)
 
 (displayln "all block separation tests passed")
+
+;; ---------------------------------------------------------------------------
+;; Error details
+;; ---------------------------------------------------------------------------
+
+(check! "base64-decode round-trips a known string"
+        (list->string (map integer->char (base64-decode "aGVsbG8=")))
+        "hello")
+
+(check! "base64-decode tolerates missing padding"
+        (list->string (map integer->char (base64-decode "aGVsbG8")))
+        "hello")
+
+;; `_` is URL-safe for `/`, i.e. value 63; cross-checked against base64 -d.
+(check! "base64-decode accepts the URL-safe alphabet"
+        (list->string (map integer->char (base64-decode "cT8_Pg")))
+        "q??>")
+
+(check! "printable-runs splits on control bytes"
+        (printable-runs (list 10 104 105 0 0 98 121 101) 2)
+        (list "hi" "bye"))
+
+(check! "printable-runs drops runs below the minimum"
+        (printable-runs (list 104 105 0 122) 2)
+        (list "hi"))
+
+;; The real payload from a protovalidate failure, reported against a live
+;; service: the field, the rule and the message all survive as plain strings.
+(define violation-blob
+  "CkgSDnN0cmluZy5taW5fbGVuGip2YWx1ZSBsZW5ndGggbXVzdCBiZSBhdCBsZWFzdCAxIGNoYXJhY3RlcnMqCgoICAESBG5hbWU")
+
+;; Containment, not equality: a run can pick up a neighbouring protobuf tag
+;; byte that happens to be printable -- the message comes back wrapped in the
+;; `*` (0x2a) that tags the field after it. Cosmetic, and not worth a real
+;; protobuf scan to remove.
+(define (any-run-contains? blob needle)
+  (if (filter (lambda (run) (string-contains? run needle)) (decode-detail-values blob))
+      (not (null? (filter (lambda (run) (string-contains? run needle))
+                          (decode-detail-values blob))))
+      #false))
+
+(check! "a protovalidate blob yields its message"
+        (any-run-contains? violation-blob "value length must be at least 1 characters")
+        #true)
+
+(check! "a protovalidate blob yields the rule id"
+        (any-run-contains? violation-blob "string.min_len")
+        #true)
+
+(check! "a protovalidate blob yields the field name"
+        (any-run-contains? violation-blob "name")
+        #true)
+
+(displayln "all error detail tests passed")

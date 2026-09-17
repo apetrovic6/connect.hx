@@ -638,3 +638,78 @@
 ;; merely has "reflection" in its name is untouched.
 (define (infrastructure-method? line)
   (starts-with? (trim line) "grpc.reflection."))
+
+;; ---------------------------------------------------------------------------
+;; Error details
+;;
+;; A Connect error carries `details` as Any-packed protobuf: a type URL and a
+;; base64 payload, which renders as an unreadable blob. Decoding it properly
+;; needs the message's descriptor -- `buf convert buf.build/bufbuild/protovalidate
+;; --type buf.validate.Violations` does it for protovalidate, at the cost of a
+;; network round trip to the BSR on an error path, and works only for types the
+;; BSR knows.
+;;
+;; Pulling the printable runs out of the raw bytes instead needs no schema, no
+;; network and no process, and recovers what actually matters: protobuf string
+;; fields are stored verbatim, so the constraint id, the message and the field
+;; name all survive. A validation blob yields "name", "string.min_len", "value
+;; length must be at least 1 characters" -- which is the whole content of the
+;; error.
+;; ---------------------------------------------------------------------------
+
+(provide base64-decode
+         printable-runs
+         decode-detail-values)
+
+(define (base64-char-value c)
+  (let ([n (char->integer c)])
+    (cond
+      [(and (>= n 65) (<= n 90)) (- n 65)]
+      [(and (>= n 97) (<= n 122)) (+ (- n 97) 26)]
+      [(and (>= n 48) (<= n 57)) (+ (- n 48) 52)]
+      [(or (char=? c #\+) (char=? c #\-)) 62]
+      [(or (char=? c #\/) (char=? c #\_)) 63]
+      [else #false])))
+
+;; base64 (standard or URL-safe, padded or not) to a list of byte values.
+;; Anything outside the alphabet -- padding, newlines, quotes -- is skipped, so
+;; a value lifted straight out of JSON needs no cleaning first.
+(define (base64-decode s)
+  (let loop ([i 0] [acc 0] [bits 0] [out '()])
+    (if (>= i (string-length s))
+        (reverse out)
+        (let ([v (base64-char-value (string-ref s i))])
+          (if (not v)
+              (loop (+ i 1) acc bits out)
+              (let ([acc2 (+ (* acc 64) v)] [bits2 (+ bits 6)])
+                (if (>= bits2 8)
+                    (let* ([shift (- bits2 8)]
+                           [divisor (expt 2 shift)])
+                      (loop (+ i 1)
+                            (modulo acc2 divisor)
+                            shift
+                            (cons (quotient acc2 divisor) out)))
+                    (loop (+ i 1) acc2 bits2 out))))))))
+
+;; Runs of printable ASCII at least MIN-LEN long. The length prefixes and field
+;; tags around them are control bytes, so they break the runs by themselves.
+(define (printable-runs bytes min-len)
+  (let loop ([bs bytes] [current '()] [out '()])
+    (cond
+      [(null? bs)
+       (reverse (if (>= (length current) min-len)
+                    (cons (list->string (reverse current)) out)
+                    out))]
+      [(printable-byte? (car bs)) (loop (cdr bs) (cons (integer->char (car bs)) current) out)]
+      [else
+       (loop (cdr bs)
+             '()
+             (if (>= (length current) min-len)
+                 (cons (list->string (reverse current)) out)
+                 out))])))
+
+(define (printable-byte? b) (and (>= b 32) (<= b 126)))
+
+;; Readable fragments from a base64 Any payload.
+(define (decode-detail-values value)
+  (printable-runs (base64-decode value) 3))

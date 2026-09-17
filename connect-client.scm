@@ -281,7 +281,45 @@
                  (if (= (string-length text) 0)
                      "_(no output)_\n"
                      (fence text (if ok "application/json" #false)))
+                 (if ok "" (format-error-details text))
                  "\n---\n\n"))
+
+;; Connect packs error `details` as Any: a type URL and a base64 payload, which
+;; renders as a wall of unreadable base64 exactly when you most want to read it.
+;; The printable runs inside carry the real content -- field, rule, message --
+;; so they go underneath the raw body rather than replacing it.
+;;
+;; Best-effort throughout: a body that is not the expected shape, or carries no
+;; details, adds nothing and costs nothing.
+(define (format-error-details text)
+  (let ([values (detail-values text)])
+    (if (null? values)
+        ""
+        (string-append "\n## details\n\n"
+                       (apply string-append
+                              (map (lambda (v)
+                                     (apply string-append
+                                            (map (lambda (line) (string-append "- " line "\n"))
+                                                 (decode-detail-values v))))
+                                   values))))))
+
+;; The `value` of each entry in the error body's `details` array.
+(define (detail-values text)
+  (with-handler
+   (lambda (err) '())
+   (let ([parsed (string->jsexpr text)])
+     (if (not (hash? parsed))
+         '()
+         (let ([details (hash-try-get parsed 'details)])
+           (if (not (list? details))
+               '()
+               (transduce details
+                          (flat-mapping (lambda (d)
+                                          (if (hash? d)
+                                              (let ([v (hash-try-get d 'value)])
+                                                (if (string? v) (list v) '()))
+                                              '())))
+                          (into-list))))))))
 
 (define (first-line s) (trim (car (split-many s "\n"))))
 

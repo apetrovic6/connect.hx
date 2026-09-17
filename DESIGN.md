@@ -219,8 +219,14 @@ convenience:
 
    Raw curl gives a green result for a request that did not do what was
    written. `buf curl` catches it client-side, for free.
-5. **Error `details` decoding.** Turns the `Any`-packed blobs into readable
-   messages. Worth it only if the services actually use rich errors.
+5. **Error `details` decoding.** *(done)* Connect packs `details` as Any -- a
+   type URL and a base64 payload -- which renders as a wall of base64 exactly
+   when you most want to read it. The printable runs inside the raw bytes carry
+   the content, because protobuf stores string fields verbatim, so they are
+   listed under the body. No schema, no network, no process: decoding properly
+   would mean `buf convert buf.build/bufbuild/protovalidate --type
+   buf.validate.Violations`, a BSR round trip on an error path that only works
+   for types the BSR knows.
 6. **Hover docs.** Proto comments ride along in the descriptor set. Needs a
    custom component or an LSP.
 7. **Field completion while typing.** The demo-friendly feature and the
