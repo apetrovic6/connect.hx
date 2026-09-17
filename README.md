@@ -152,8 +152,9 @@ serve reflection. `:connect-doctor` reports which executors are available.
 | `:connect-methods` | pick a method `@base` serves; inserts a scaffolded request |
 | `:connect-clear` | empty the `*connect*` log and reset entry numbering |
 
-Responses are appended and numbered, so successive calls can be compared; use
-`:connect-clear` when the log gets long.
+Responses accumulate and are numbered, newest first, so successive calls can be
+compared and the one you just ran is always at the top; use `:connect-clear`
+when the log gets long.
 
 ## Licence
 

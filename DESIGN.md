@@ -385,9 +385,9 @@ the shape http.hx established -- it works and there is no reason to be novel.
 Focus returns to the request buffer after rendering: the response is to be read,
 not edited.
 
-Each response is **appended**, so a sequence of calls can be compared against
-each other. Entries are numbered and separated by a rule; `:connect-clear`
-empties the log and resets the counter.
+Responses accumulate rather than replacing each other, so a sequence of calls can
+be compared. Entries are numbered and separated by a rule, newest at the top;
+`:connect-clear` empties the log and resets the counter.
 
 The append is done by rewriting the buffer with old + new rather than seeking
 to the end and inserting there, which looks wasteful and is not. `select_all`
@@ -414,9 +414,13 @@ tested, still panics. Note the typed `:goto` panics here even though the static
 commands around it are fine, so view positioning after a write is limited to
 `helix/static.scm` commands.
 
-Known rough edge: the view lands at the bottom of the buffer, so a long
-response scrolls its own header off screen. Putting the cursor at the top of
-the new entry is what `:goto` was for, and it is currently unavailable.
+Entries are newest-first, and the view is reset to the top after each run, so the
+entry you just ran always starts at line 1 with its header visible. Appending
+instead left the view at the bottom, and an entry taller than the pane scrolled
+its own header -- the line naming which call it was -- off the top. Keeping
+chronological order and scrolling to the new entry is not possible: `goto_line`
+is a static command driven by cx.count, which steel cannot set, and the typed
+`:goto` panics from here.
 The rendered shape, as implemented:
 
 ```markdown

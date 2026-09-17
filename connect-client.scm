@@ -127,46 +127,44 @@
             (editor-set-focus! origin)
             new-id)))))
 
-;; Append TEXT to the *connect* buffer and scroll the new entry into view.
+;; Add TEXT to the *connect* buffer as the NEWEST entry, at the top.
 ;;
-;; Append rather than replace, so a sequence of calls can be compared against
-;; each other -- which is most of what this is for. `:connect-clear` wipes the
-;; log when it gets long.
+;; Newest-first rather than chronological, because the entry you just ran has to
+;; be the one you can see. Appending put it at the bottom and left the view at
+;; the bottom with it, which is fine until an entry is taller than the pane --
+;; then its own header, the line naming which call it was, scrolls off the top
+;; and you are looking at an unlabelled body.
 ;;
-;; The append is done by rewriting the buffer with old + new rather than by
-;; seeking to the end and inserting there. That looks wasteful and is
-;; deliberate: `select_all` followed by `delete_selection` is the only sequence
-;; observed to survive the first write into a newly created buffer. Seeking
-;; instead -- with `goto_file_end`, or `collapse_selection`, deferred through
-;; enqueue-thread-local-callback or not -- builds a transaction whose positions
-;; still belong to the request buffer and applies it to the 1-character
-;; response document, panicking helix outright rather than erroring:
+;; Scrolling to the start of the new entry instead would keep chronological
+;; order, and there is no way to do it: `goto_line` is a static command driven by
+;; cx.count, which steel cannot set, and the typed `:goto` panics helix when
+;; called from here (see below). Putting the entry at the top needs no line
+;; arithmetic at all.
+;;
+;; The buffer is rewritten whole rather than inserted into. `select_all` +
+;; `delete_selection` is the only sequence found that survives the first write
+;; into a newly created buffer: seeking instead -- `goto_file_end`,
+;; `collapse_selection`, or the typed `:goto`, deferred or not -- builds a
+;; transaction whose positions still belong to the request buffer and applies it
+;; to the 1-character response document, panicking helix rather than erroring:
 ;;   Positions [(586, AfterSticky), (587, BeforeSticky)] are out of range for
-;;   changeset len 1!  (helix-core/src/transaction.rs:509)
-;; select_all rewrites the selection against the document actually being
-;; edited, which is what makes it safe; http.hx opens with the same two calls.
-;; The buffer is a session-local log of small responses, so rewriting it costs
-;; nothing worth optimising.
-;;
-;; The cursor then goes to the top of the newly appended entry rather than the
-;; end of the buffer: a long response would otherwise scroll its own header off
-;; screen, and that header is the line saying which call this was. `goto` is
-;; 1-indexed and the count is of the lines already present, so it addresses the
-;; first line of what was just added.
+;;   changeset len 1!  (helix-core/src/transaction.rs)
+;; select_all rewrites the selection against the document actually being edited,
+;; which is what makes it safe. The log is a session-local list of small
+;; responses, so rewriting it costs nothing worth optimising.
 (define (append-response! text)
   (let ([doc-id (ensure-response-buffer)]
         [origin (editor-focus)])
     (let ([view (editor-doc-in-view? doc-id)])
       (when view
         (let* ([existing (text.rope->string (editor->text doc-id))]
-               [existing (if (= (string-length (trim existing)) 0) "" existing)]
-               [line-count (length (split-many existing "\n"))])
+               [existing (if (= (string-length (trim existing)) 0) "" existing)])
           (editor-set-focus! view)
           (helix.static.select_all)
           (helix.static.delete_selection)
-          (helix.static.insert_string (string-append existing text))
-          (helix.static.goto_file_end)
-          (helix.static.align_view_bottom)
+          (helix.static.insert_string (string-append text existing))
+          (helix.static.goto_file_start)
+          (helix.static.align_view_top)
           (editor-set-focus! origin))))))
 
 ;; ---------------------------------------------------------------------------
