@@ -234,16 +234,50 @@
 
 (define (separator-line? line) (starts-with? (trim line) "###"))
 
+;; Blocks are separated by `###`, and ALSO by a `>>` line once the current block
+;; already holds a request.
+;;
+;; Without that second rule, two shorthand requests separated by nothing but a
+;; blank line read as one block: the first `>>` becomes the request and
+;; everything below it -- the second `>>` line and its body included -- becomes
+;; the body. buf then sees two JSON messages for a unary call and fails with
+;; "input contained more than one request message". `###` between them is the
+;; documented form, but not writing one is an easy and reasonable mistake, and
+;; `>>` is our own marker so it can carry the meaning unambiguously.
+;;
+;; The "already holds a request" guard is what stops `### one` followed by
+;; `>> pkg.S/M` from splitting into two blocks.
 (define (split-blocks text)
   (let ([lines (split-many text "\n")])
-    (let loop ([ls lines] [i 0] [start 0] [cur '()] [acc '()])
+    (let loop ([ls lines] [i 0] [start 0] [cur '()] [seen #false] [acc '()])
       (cond
         [(null? ls)
          (reverse (cons (make-block start (if (> i 0) (- i 1) 0) (reverse cur)) acc))]
-        [(and (separator-line? (car ls)) (not (= i start)))
-         (loop (cdr ls) (+ i 1) i (list (car ls))
+        [(and (or (separator-line? (car ls)) (and seen (shorthand-request-line? (car ls))))
+              (not (= i start)))
+         (loop (cdr ls)
+               (+ i 1)
+               i
+               (list (car ls))
+               (shorthand-request-line? (car ls))
                (cons (make-block start (- i 1) (reverse cur)) acc))]
-        [else (loop (cdr ls) (+ i 1) start (cons (car ls) cur) acc)]))))
+        [else
+         (loop (cdr ls)
+               (+ i 1)
+               start
+               (cons (car ls) cur)
+               (or seen (request-bearing-line? (car ls)))
+               acc)]))))
+
+(define (shorthand-request-line? line) (starts-with? (trim line) shorthand-marker))
+
+;; A line that could be a request line: not blank, not a comment, not an `@`
+;; declaration, and not the `###` separator itself.
+(define (request-bearing-line? line)
+  (and (not (blank-line? line))
+       (not (comment-line? line))
+       (not (declaration-line? line))
+       (not (separator-line? line))))
 
 ;; The block containing LINE. Falls back to the last block when the line is
 ;; past the end, which happens when the cursor sits on the trailing newline.

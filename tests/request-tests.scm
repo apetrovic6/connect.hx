@@ -519,3 +519,49 @@
         1)
 
 (displayln "all reflection-filter tests passed")
+
+;; ---------------------------------------------------------------------------
+;; Shorthand requests separate themselves
+;; ---------------------------------------------------------------------------
+
+;; Reported from a real file: two `>>` requests with no `###` between them read
+;; as one block, so the first request's body swallowed the second request whole
+;; and buf failed with "input contained more than one request message".
+(define unseparated
+  (string-join (list "@base = http://localhost:5000/api"
+                     ""
+                     ">> auth.v1.AuthService/Login"
+                     "{"
+                     "  \"email\": \"a@b.c\""
+                     "}"
+                     ""
+                     ""
+                     ">> health.v1.HealthService/HealthCheck"
+                     "{}")
+               "\n"))
+
+(define unsep-vars (resolve-variables (parse-variables unseparated)))
+(define unsep-blocks (split-blocks unseparated))
+
+;; Two, not three: the @base preamble has nothing separating it from the first
+;; request, so they share a block. parse-request skips the declaration.
+(check! "a >> line starts a new block" (length unsep-blocks) 2)
+
+(check! "the first body stops at the next >>"
+        (request-body (parse-request (block-lines (block-at-line unsep-blocks 3)) unsep-vars))
+        "{\n  \"email\": \"a@b.c\"\n}")
+
+(check! "the second request is its own"
+        (request-url (parse-request (block-lines (block-at-line unsep-blocks 8)) unsep-vars))
+        "http://localhost:5000/api/health.v1.HealthService/HealthCheck")
+
+;; The guard: a `###` heading followed by its own `>>` is still one block.
+(check! "a >> directly under ### does not split"
+        (length (split-blocks "### one\n>> pkg.S/M\n{}"))
+        1)
+
+(check! "a >> under a comment and a declaration does not split"
+        (length (split-blocks "# note\n@x = 1\n>> pkg.S/M\n{}"))
+        1)
+
+(displayln "all block separation tests passed")

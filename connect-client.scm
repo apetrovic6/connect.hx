@@ -582,7 +582,14 @@
        (let ([methods (method-refs (split-many (hash-ref result 'stdout) "\n"))])
          (if (null? methods)
              (set-error! (string-append "connect.hx: no methods reported by " base))
-             (pick methods (lambda (method) (insert-request-stub! base method)))))])))
+             (pick methods
+                   (lambda (method) (insert-request-stub! base method))
+                   (lambda (method) (preview-for base method)))))])))
+
+;; The right pane: the request as it would be inserted. Computed on demand and
+;; cached by the picker, because each one costs two grpcurl calls.
+(define (preview-for base method)
+  (split-many (string-append ">> " method "\n" (scaffold-body base method)) "\n"))
 
 ;; Every `pkg.Service/Method` line buf listed, flattened back out of the
 ;; grouping -- the picker wants one flat list of candidates to match against.
