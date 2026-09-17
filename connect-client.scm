@@ -12,6 +12,7 @@
 
 (require "run-command/run-command.scm")
 (require "connect.hx/connect-request.scm")
+(require "connect.hx/connect-picker.scm")
 (require-builtin helix/core/text as text.)
 (require-builtin steel/time)
 (require (prefix-in helix. "helix/commands.scm"))
@@ -567,6 +568,8 @@
       [(not base) (set-error! "connect.hx: no @base declared")]
       [else (list-methods-at (cdr base) schema)])))
 
+;; buf is asked once and the result handed to the picker, rather than the picker
+;; re-fetching as you type: filtering is local, and listing is a process spawn.
 (define (list-methods-at base schema)
   (let ([result (run-argv "buf"
                           (buf-list-methods-argv base schema)
@@ -576,37 +579,21 @@
       [(not (hash-ref result 'ok))
        (set-error! (string-append "connect.hx: " (first-line (trim (hash-ref result 'stderr)))))]
       [else
-       (let* ([lines (split-many (hash-ref result 'stdout) "\n")]
-              [grouped (group-methods lines)]
-              [count (foldl (lambda (entry n) (+ n (length (cdr entry)))) 0 grouped)])
-         (if (= count 0)
+       (let ([methods (method-refs (split-many (hash-ref result 'stdout) "\n"))])
+         (if (null? methods)
              (set-error! (string-append "connect.hx: no methods reported by " base))
-             (begin
-               (append-response! (format-methods base grouped (next-index!)))
-               (set-status! (string-append "connect.hx: "
-                                           (to-string count)
-                                           " method"
-                                           (if (= count 1) "" "s")
-                                           " in "
-                                           (to-string (length grouped))
-                                           " service"
-                                           (if (= (length grouped) 1) "" "s"))))))])))
+             (pick methods insert-request-stub!)))])))
 
-;; Rendered as `>>` lines rather than a bare list: each one is a request you can
-;; yank straight into a .connect file, which is the thing you wanted the list
-;; for. Helix exposes no picker over arbitrary strings -- both registered ones
-;; open the selection as a file path -- so this is discovery by buffer.
-(define (format-methods base grouped index)
-  (string-append
-   "# " (to-string index) " . methods at " base "\n\n"
-   (apply string-append
-          (map (lambda (entry)
-                 (string-append
-                  "## " (car entry) "\n\n```http\n"
-                  (apply string-append
-                         (map (lambda (method)
-                                (string-append ">> " (car entry) "/" method "\n"))
-                              (cdr entry)))
-                  "```\n\n"))
-               grouped))
-   "---\n\n"))
+;; Every `pkg.Service/Method` line buf listed, flattened back out of the
+;; grouping -- the picker wants one flat list of candidates to match against.
+(define (method-refs lines)
+  (transduce (group-methods lines)
+             (flat-mapping (lambda (entry)
+                             (map (lambda (m) (string-append (car entry) "/" m)) (cdr entry))))
+             (into-list)))
+
+;; Insert a ready-to-run request at the cursor rather than just the name: what
+;; you want after choosing a method is a request that calls it.
+(define (insert-request-stub! method)
+  (helix.static.insert_string (string-append ">> " method "\n{}\n"))
+  (set-status! (string-append "connect.hx: inserted " method)))

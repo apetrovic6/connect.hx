@@ -62,6 +62,7 @@
       [else (displayln (string-append "ok   " path " brackets balanced"))])))
 
 (check-file "connect-client.scm")
+(check-file "connect-picker.scm")
 (check-file "connect-request.scm")
 
 (displayln "all syntax checks passed")
