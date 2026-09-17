@@ -24,7 +24,7 @@ buildHelixPlugin {
 
   meta = {
     description = "A ConnectRPC client for the Helix editor";
-    homepage = "https://github.com/apetrovic/connect.hx";
+    homepage = "https://github.com/apetrovic6/connect.hx";
     license = lib.licenses.mit;
     platforms = lib.platforms.unix;
   };
