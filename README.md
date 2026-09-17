@@ -4,9 +4,11 @@ A [ConnectRPC](https://connectrpc.com) client for the [Helix](https://helix-edit
 editor: write requests in a buffer, execute them against a running service, read
 the response in a split.
 
-> **Status: milestone 1.** Requests execute: put the cursor in a request block
-> and run `:connect-exec`. Verified against a live service. No schema awareness
-> yet, and execution blocks the editor thread while the request is in flight.
+> **Status: working, and in use against a real service.** Requests execute from
+> the buffer, `buf curl` validates against the schema, methods are discoverable
+> in a picker, and request bodies are scaffolded from descriptors. Known limits
+> are in [DESIGN.md](./DESIGN.md) §11 -- notably that requests block the editor
+> thread while in flight.
 
 Requires Helix with the experimental Steel plugin system
 ([mattwparas/helix, `steel-event-system`](https://github.com/mattwparas/helix/tree/steel-event-system)).
@@ -97,7 +99,7 @@ Optionally bind the commands under `space H`:
 ```
 
 `space H c` executes under the cursor, `H s` the selection, `H b` the whole
-buffer, `H m` lists methods, `H x` clears. The bindings are scoped to `.connect`
+buffer, `H m` picks a method to insert, `H x` clears. The bindings are scoped to `.connect`
 and `.http` files -- helix selects a keymap by the focused file's extension -- so
 `space H` stays free everywhere else. Each extension map inherits a copy of the
 global keymap, which keeps the rest of your bindings working inside those files.

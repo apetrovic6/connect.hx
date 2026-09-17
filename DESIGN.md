@@ -5,16 +5,15 @@ them against a running service, read the response in a split. The `.http`-file
 workflow from VS Code's REST Client and the JetBrains HTTP Client, specialised
 for Connect.
 
-Status: **milestone 1**. Requests execute: the block under the cursor is parsed,
-sent with curl, and rendered into a `*connect*` split. Verified against the live
-demo service for success, HTTP error, Connect error envelope, and no-request
-cases. No schema awareness yet, and execution blocks the editor thread.
+Status: **all five milestones done**, and in use against a real service. Requests
+execute from the buffer (cursor, selection, or whole file), `>>` shorthand,
+`buf curl` as the schema-aware executor with client-side validation and decoded
+streaming, a fuzzy picker over the methods a server serves, request bodies
+scaffolded from the schema, and Connect error details decoded.
 
-Everything below the "Architecture" heading beyond milestone 1 is a plan, not a
-description of working code.
+Known bugs and limits are recorded where they bite, and collected in §11.
 
-
-Last updated 2026-09-16.
+Last updated 2026-09-17.
 
 ---
 
@@ -528,6 +527,37 @@ the schema work is then informed by actual use rather than speculation.
   every injection).
 
 ---
+
+## 11. Known bugs and limits
+
+- **The response pane does not scroll back to the top.** The newest entry is at
+  line 1 and the cursor is on it, but a pane that is not focused when the frame
+  renders keeps the offset it took when the cursor was at the end of the insert
+  -- so a response taller than the pane hides its own header. Focusing the pane
+  snaps it (`Editor::focus` calls `ensure_cursor_in_view`). Six fixes failed:
+  `goto_file_start` inline and deferred, `select_all` + `flip_selections` +
+  `collapse_selection`, `align_view_top`, a delayed focus restore so a frame
+  renders while focused, and focusing away and back. The steel bridge exposes
+  nothing for view offsets -- every `register_fn` matching view/offset/scroll is
+  `lsp-client-offset-encoding` -- so the only untried route is leaving focus in
+  the response pane, which does work but moves the cursor out of the request
+  buffer. The status line names the method as a stopgap.
+- **Requests block the editor thread.** Imperceptible against localhost; a slow
+  endpoint freezes the editor until the timeout (default 30s). The non-blocking
+  primitives exist (`enqueue-thread-local-callback-with-delay`, native threads
+  in run-command); the work has not been done.
+- **Scaffolding needs gRPC reflection**, while everything else needs only
+  Connect reflection. A Connect-only server, or a `@base` with a path prefix,
+  falls back to `{}` -- gRPC has no path prefix to mount reflection under and
+  grpcurl cannot express one. The status line says when it fell back.
+- **Error detail decoding is a string scrape**, not a protobuf parse, so a
+  fragment can pick up a neighbouring tag byte that happens to be printable (the
+  `*` around a message). Decoding properly means a BSR round trip and only works
+  for types the BSR knows.
+- **`:oil` and the `.http` grammar live in the magos config**, not here, so a
+  fresh install of this plugin gets neither highlighting nor the keymap unless
+  the consumer wires them up. The README covers the keymap; the grammar is
+  documented in §10.
 
 ## Appendix: verification log
 
