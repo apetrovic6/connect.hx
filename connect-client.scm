@@ -16,6 +16,9 @@
 (require-builtin steel/time)
 (require (prefix-in helix. "helix/commands.scm"))
 (require (prefix-in helix.static. "helix/static.scm"))
+;; Not only-in: `keymap` is a macro rather than a plain binding, and this is a
+;; module, so nothing required here leaks into the global environment anyway.
+(require "helix/keymaps.scm")
 (require "helix/editor.scm")
 (require (only-in "helix/misc.scm"
                   set-status!
@@ -26,7 +29,8 @@
 (provide connect-doctor
          connect-exec
          connect-set-timeout
-         connect-clear)
+         connect-clear
+         connect-install-keybindings!)
 
 ;; How long a probe may take before it is treated as a missing binary. Short:
 ;; `command -v` either answers immediately or something is badly wrong, and
@@ -368,3 +372,35 @@
         (editor-set-focus! origin)))
     (state-set! 'request-count 0)
     (set-status! "connect.hx: cleared")))
+
+;; ---------------------------------------------------------------------------
+;; Keybindings
+;; ---------------------------------------------------------------------------
+
+;;@doc
+;; Bind the connect.hx commands under `space c` in normal mode.
+;;
+;; Offered as a function rather than done at load, so the decision stays with
+;; the config: requiring this module gets you the commands, calling this gets
+;; you the keys.
+;;
+;; Worth doing from here rather than from config.toml/keybinds.nix, because
+;; only this path carries documentation. `merge-keybindings` calls
+;; `keymap-update-documentation!` with the `@doc` string of every bound
+;; command, which is what the space-menu popup then shows. A keymap written in
+;; the editor config cannot supply that text at all: `KeyTrieNode.name` is
+;; `#[serde(skip)]`, so a config-defined submenu deserialises with an empty
+;; label and the popup row comes up blank.
+;;
+;; Registration is deferred into a callback: an error raised while init.scm is
+;; still running aborts the require in progress, and every command in this file
+;; would then silently fail to register -- surfacing much later as "free
+;; identifier: connect-exec", nowhere near the actual mistake. Same reasoning as
+;; the oil keymap.
+(define (connect-install-keybindings!)
+  (enqueue-thread-local-callback
+   (lambda ()
+     (keymap (global)
+             (normal (space (c (c ":connect-exec")
+                               (d ":connect-doctor")
+                               (x ":connect-clear"))))))))
