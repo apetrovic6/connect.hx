@@ -93,8 +93,9 @@ Optionally bind the commands under `space H`:
 ```
 
 `space H c` executes under the cursor, `H s` the selection, `H b` the whole
-buffer, `H x` clears. The bindings are scoped to `.connect` and `.http` files -- helix selects a keymap by the focused file's extension --
-so `space H` stays free everywhere else. Each extension map inherits a copy of
+buffer, `H x` clears. The bindings are scoped to `.connect` and `.http` files --
+helix selects a keymap by the focused file's extension -- so `space H` stays
+free everywhere else. Each extension map inherits a copy of
 the global keymap, which keeps the rest of your bindings working inside those
 files.
 
