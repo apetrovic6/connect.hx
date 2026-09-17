@@ -58,6 +58,18 @@ module, or the commands will not be registered:
 (require "connect.hx/connect-client.scm")
 ```
 
+Optionally bind the commands under `space c`:
+
+```scheme
+(connect-install-keybindings!)
+```
+
+Binding from steel rather than from `config.toml` is what gets you hints in the
+space-menu popup: that path attaches each command's `@doc` string to the keymap.
+A keymap written in the editor config cannot supply that text -- helix skips
+`KeyTrieNode`'s label when deserialising, so a config-defined submenu renders
+with a blank description.
+
 Verify with `:connect-doctor`, which reports which executors are on PATH.
 
 When consuming it as a local `path:` input during development, note that nix
