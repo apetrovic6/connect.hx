@@ -459,14 +459,21 @@ The parsed value is used ONLY for that summary. steel's JSON reader turns
 integers into floats, so a re-serialised body would misreport what the server
 actually sent -- the body shown is always the bytes curl received.
 
-**Blocking.** `run-command` drains concurrently but still `thread-join!`s, so
-the call blocks the editor thread until the process exits. Against localhost
-this is imperceptible; against a slow endpoint it freezes the editor. The
-timeout (default 30s, as http.hx uses) bounds the damage but does not fix it.
-A non-blocking path -- spawn, return, poll via
-`enqueue-thread-local-callback-with-delay`, repopulate the buffer when the
-process exits -- is the known fix, and the primitives exist. Deferred until
-the blocking version proves annoying in practice.
+**Not blocking.** A request is spawned under a shell that redirects its output
+to files and writes the exit status to a third when it finishes; a callback
+polls for that file every 40ms and renders when it appears. `wait` is called
+only once the process has already exited, so it reaps rather than blocks. The
+editor stays live while a request is in flight -- verified by typing into the
+buffer mid-request.
+
+The timeout lives in the shell, for the reason run-command documents: steel's
+`kill` takes the child, SIGKILLs it and drops the handle without reaping,
+leaving a zombie with no exposed pid. The watchdog kills and reaps, and a
+SIGKILLed command reports 137, which is how a timeout is told from a failure.
+
+Requests run in sequence rather than together: they share one response buffer
+and one entry counter, and running them concurrently would interleave the log
+for no real gain.
 
 ---
 
@@ -542,10 +549,10 @@ the schema work is then informed by actual use rather than speculation.
   `lsp-client-offset-encoding` -- so the only untried route is leaving focus in
   the response pane, which does work but moves the cursor out of the request
   buffer. The status line names the method as a stopgap.
-- **Requests block the editor thread.** Imperceptible against localhost; a slow
-  endpoint freezes the editor until the timeout (default 30s). The non-blocking
-  primitives exist (`enqueue-thread-local-callback-with-delay`, native threads
-  in run-command); the work has not been done.
+- **Method listing, scaffolding and the picker preview still block.** Request
+  execution does not (see §8), but `:connect-methods` shells out to buf, and
+  each picker preview costs two grpcurl calls. Short against a local server;
+  the same async machinery would apply if it ever grates.
 - **Scaffolding needs gRPC reflection**, while everything else needs only
   Connect reflection. A Connect-only server, or a `@base` with a path prefix,
   falls back to `{}` -- gRPC has no path prefix to mount reflection under and

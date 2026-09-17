@@ -629,3 +629,37 @@
         "notaurl")
 
 (displayln "all method-ref tests passed")
+
+;; ---------------------------------------------------------------------------
+;; Async execution
+;; ---------------------------------------------------------------------------
+
+(define async-example (async-argv "/t/o" "/t/e" "/t/d" 30 "curl" (list "-X" "POST" "http://x")))
+
+;; The command goes in as positional arguments, never interpolated, so a body
+;; full of quotes cannot be re-split by the shell.
+(check! "async-argv passes the program positionally"
+        (if (member "curl" async-example) #true #false)
+        #true)
+
+(check! "async-argv keeps the arguments after the program"
+        (last async-example)
+        "http://x")
+
+(check! "async-argv carries the three paths and the timeout"
+        (list (list-ref async-example 3)
+              (list-ref async-example 4)
+              (list-ref async-example 5)
+              (list-ref async-example 6))
+        (list "/t/o" "/t/e" "/t/d" "30"))
+
+(check! "async-argv runs a script, not a command string"
+        (list-ref async-example 0)
+        "-c")
+
+;; A body with quotes and spaces must survive as ONE argument.
+(check! "async-argv does not split a json body"
+        (last (async-argv "/o" "/e" "/d" 5 "curl" (list "--data-binary" "{\"a\": \"b c\"}")))
+        "{\"a\": \"b c\"}")
+
+(displayln "all async argv tests passed")

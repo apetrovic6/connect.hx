@@ -728,3 +728,43 @@
           (if (or (= (string-length method) 0) (= (string-length service) 0))
               url
               (string-append service "/" method))))))
+
+;; ---------------------------------------------------------------------------
+;; Running a command without blocking
+;;
+;; run-command waits, which is fine for a version probe and wrong for a request:
+;; the editor is frozen until the server answers. Instead the executor is run
+;; under a shell that redirects its output to files and writes the exit status
+;; to a third when it is done, and steel polls for that file. Nothing is waited
+;; on until it has already exited.
+;;
+;; The timeout is enforced in the shell for the same reason run-command does it
+;; there: steel's `kill` takes the child, SIGKILLs it and drops the handle
+;; without reaping, leaving a zombie with no exposed pid. The watchdog kills and
+;; reaps, and a SIGKILLed command reports 137, which is how a timeout is told
+;; apart from a command that merely failed.
+;; ---------------------------------------------------------------------------
+
+(provide async-argv async-timeout-exit-code)
+
+(define async-timeout-exit-code 137)
+
+(define async-runner
+  (string-append "out=$1; err=$2; done=$3; timeout=$4; shift 4\n"
+                 "\"$@\" > \"$out\" 2> \"$err\" &\n"
+                 "cpid=$!\n"
+                 "( sleep \"$timeout\"; kill -9 \"$cpid\" 2>/dev/null ) >/dev/null 2>&1 &\n"
+                 "wpid=$!\n"
+                 "wait \"$cpid\"; status=$?\n"
+                 "kill \"$wpid\" 2>/dev/null; wait \"$wpid\" 2>/dev/null\n"
+                 "printf '%s' \"$status\" > \"$done\"\n"))
+
+;; argv for /bin/sh that runs PROGRAM with ARGS in the background.
+;;
+;; The command is passed as positional arguments and invoked as `"$@"`, never
+;; interpolated into the script, so a JSON body full of quotes and braces cannot
+;; be re-split or interpreted by the shell.
+(define (async-argv out-path err-path done-path timeout-seconds program args)
+  (append (list "-c" async-runner "sh" out-path err-path done-path
+                (to-string timeout-seconds) program)
+          args))

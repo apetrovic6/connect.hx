@@ -7,8 +7,7 @@ the response in a split.
 > **Status: working, and in use against a real service.** Requests execute from
 > the buffer, `buf curl` validates against the schema, methods are discoverable
 > in a picker, and request bodies are scaffolded from descriptors. Known limits
-> are in [DESIGN.md](./DESIGN.md) §11 -- notably that requests block the editor
-> thread while in flight.
+> are in [DESIGN.md](./DESIGN.md) §11.
 
 Requires Helix with the experimental Steel plugin system
 ([mattwparas/helix, `steel-event-system`](https://github.com/mattwparas/helix/tree/steel-event-system)).

@@ -95,7 +95,16 @@
 ;; A box rather than a struct: the only mutable state is the response buffer's
 ;; doc-id and the timeout, and a box keeps the update sites obvious.
 (define client-state
-  (box (hash 'buffer-id #false 'timeout-ms 30000 'request-count 0 'buf-available 'unknown 'grpcurl-available 'unknown)))
+  (box (hash 'buffer-id #false 'timeout-ms 30000 'request-count 0
+        'buf-available 'unknown
+        'grpcurl-available 'unknown
+        'job #false
+        'queue '()
+        'ran 0
+        'failed 0
+        'last-status ""
+        'where ""
+        'job-counter 0)))
 
 (define (state-ref key) (hash-ref (unbox client-state) key))
 
@@ -429,32 +438,169 @@
 ;; A failure does not stop the run. The point of executing several is to see all
 ;; of their results, and stopping at the first would throw away the rest; a
 ;; non-2xx is not even a failure here, just a response with an error body.
+;; Parse BLOCKS and run them one at a time, without blocking the editor.
+;;
+;; Each request is spawned under a shell that writes its output to files and its
+;; exit status to a third when it finishes; a polling callback picks that up and
+;; starts the next. So the editor stays live while a request is in flight, and a
+;; slow endpoint costs you nothing but a later answer.
+;;
+;; Requests are run in sequence rather than together. They share one response
+;; buffer and one entry counter, and a handful of calls against one service is
+;; the case that matters; running them concurrently would interleave the log for
+;; no real gain.
+;;
+;; Variables always come from the WHOLE buffer, never from the blocks being run:
+;; `@base` lives at the top of the file and a selection almost never includes it.
+;;
+;; A block that holds no request is skipped in silence -- the `@`-declaration
+;; preamble and comment-only blocks are not requests. A malformed one is counted
+;; as failed and does not stop the rest, because the point of running several is
+;; to see all the results.
 (define (run-blocks blocks where)
-  (let ([vars (resolve-variables (parse-variables (buffer-text)))])
-    (let loop ([bs blocks] [ran 0] [failed 0] [last-status ""])
-      (if (null? bs)
-          (report-run ran failed last-status where)
-          (let ([req (parse-request (block-lines (car bs)) vars)])
-            (cond
-              [(not req) (loop (cdr bs) ran failed last-status)]
-              [(request-error? req)
-               (set-error! (string-append "connect.hx: " (request-error-message req)))
-               (loop (cdr bs) ran (+ failed 1) last-status)]
-              [else
-               (let ([status (execute-request req (choose-executor req (block-lines (car bs))) vars)])
-                 (loop (cdr bs)
-                       (+ ran 1)
-                       (if status failed (+ failed 1))
-                       (if status status last-status)))]))))))
+  (if (state-ref 'job)
+      (set-error! "connect.hx: a request is already running")
+      (let* ([vars (resolve-variables (parse-variables (buffer-text)))]
+             [pending (transduce blocks
+                                 (flat-mapping (lambda (b) (pending-request b vars)))
+                                 (into-list))])
+        (state-set! 'queue pending)
+        (state-set! 'ran 0)
+        (state-set! 'failed 0)
+        (state-set! 'last-status "")
+        (state-set! 'where where)
+        (pump-queue!))))
 
+;; A block becomes zero or one entries of (req . executor). A parse error is
+;; reported now and contributes nothing to run.
+(define (pending-request block vars)
+  (let ([req (parse-request (block-lines block) vars)])
+    (cond
+      [(not req) '()]
+      [(request-error? req)
+       (set-error! (string-append "connect.hx: " (request-error-message req)))
+       '()]
+      [else (list (cons req (choose-executor req (block-lines block))))])))
+
+;; Start the next request, or report the run when there are none left.
+(define (pump-queue!)
+  (let ([queue (state-ref 'queue)])
+    (if (null? queue)
+        (begin
+          (state-set! 'job #false)
+          (report-run (state-ref 'ran)
+                      (state-ref 'failed)
+                      (state-ref 'last-status)
+                      (state-ref 'where)))
+        (let ([entry (car queue)])
+          (state-set! 'queue (cdr queue))
+          (start-request! (car entry) (cdr entry))))))
+
+;; How often to look for a finished request. Short enough to feel immediate,
+;; long enough not to spin: a poll is a path-exists? call, not a process.
+(define poll-interval-ms 40)
+
+(define (start-request! req executor)
+  (let* ([paths (job-paths!)]
+         [argv (executor-argv req executor)]
+         [command-line (async-argv (hash-ref paths 'out)
+                                   (hash-ref paths 'err)
+                                   (hash-ref paths 'done)
+                                   (quotient (state-ref 'timeout-ms) 1000)
+                                   (car argv)
+                                   (cdr argv))]
+         [spawned (spawn-process (command "/bin/sh" command-line))])
+    (if (Err? spawned)
+        (begin
+          (set-error! (string-append "connect.hx: could not start " executor))
+          (state-set! 'failed (+ 1 (state-ref 'failed)))
+          (pump-queue!))
+        (begin
+          (state-set! 'job
+                      (hash 'child (Ok->value spawned)
+                            'req req
+                            'executor executor
+                            'paths paths
+                            'started (instant/now)))
+          (enqueue-thread-local-callback-with-delay poll-interval-ms poll-request!)))))
+
+;; The executor's own argv, minus the program name, which async-argv needs
+;; separately.
+(define (executor-argv req executor)
+  (if (equal? executor "buf")
+      (cons "buf"
+            (buf-curl-argv (request-url req)
+                           (request-headers req)
+                           (request-body req)
+                           (schema-for req)))
+      (cons "curl" (request->curl-argv req))))
+
+(define (schema-for req)
+  (let ([declared (assoc "schema" (resolve-variables (parse-variables (buffer-text))))])
+    (if declared (cdr declared) #false)))
+
+;; Look for the done file. Present means the shell has finished and written the
+;; exit status, so `wait` reaps immediately rather than blocking.
+(define (poll-request! )
+  (let ([job (state-ref 'job)])
+    (when job
+      (if (path-exists? (hash-ref (hash-ref job 'paths) 'done))
+          (finish-request! job)
+          (enqueue-thread-local-callback-with-delay poll-interval-ms poll-request!)))))
+
+(define (finish-request! job)
+  (let* ([paths (hash-ref job 'paths)]
+         [exit (string->number (trim (read-file (hash-ref paths 'done))))]
+         [stdout (read-file (hash-ref paths 'out))]
+         [stderr (read-file (hash-ref paths 'err))]
+         [elapsed (duration->millis (instant/elapsed (hash-ref job 'started)))]
+         [status (render-result (hash-ref job 'req)
+                                (hash-ref job 'executor)
+                                exit
+                                stdout
+                                stderr
+                                elapsed)])
+    (wait (hash-ref job 'child))
+    (remove-job-files! paths)
+    (state-set! 'job #false)
+    (state-set! 'ran (+ 1 (state-ref 'ran)))
+    (when (not status) (state-set! 'failed (+ 1 (state-ref 'failed))))
+    (when status (state-set! 'last-status status))
+    (pump-queue!)))
+
+(define (read-file path)
+  (with-handler (lambda (err) "") (read-port-to-string (open-input-file path))))
+
+(define (remove-job-files! paths)
+  (for-each (lambda (key)
+              (with-handler (lambda (err) void) (delete-file! (hash-ref paths key))))
+            (list 'out 'err 'done)))
+
+;; Temp paths for one request, numbered so two runs cannot collide.
+(define (job-paths! )
+  (let* ([n (+ 1 (state-ref 'job-counter))]
+         [base (string-append (temp-dir) "/connect-hx-" (to-string n))])
+    (state-set! 'job-counter n)
+    (hash 'out (string-append base ".out")
+          'err (string-append base ".err")
+          'done (string-append base ".done"))))
+
+(define (temp-dir)
+  (let ([declared (with-handler (lambda (err) #false) (env-var "TMPDIR"))])
+    (if (and (string? declared) (> (string-length declared) 0)) declared "/tmp")))
+
+;; RAN is every request that finished, FAILED the subset that did not succeed --
+;; so a single failed request is ran 1, failed 1, not two events.
+;;
 ;; One request reports its own status line; several report a tally, since the
-;; individual ones would all overwrite each other anyway.
+;; individual ones would all overwrite each other anyway. A lone failure reports
+;; nothing here at all: render-result has already put the real error on the
+;; status line, and "ran 1 request, 1 failed" would replace it with less.
 (define (report-run ran failed last-status where)
   (cond
-    [(and (= ran 0) (= failed 0))
-     (set-error! (string-append "connect.hx: no request " where))]
-    [(= (+ ran failed) 1)
-     (when (> (string-length last-status) 0) (set-status! last-status))]
+    [(= ran 0) (set-error! (string-append "connect.hx: no request " where))]
+    [(= ran 1)
+     (when (and (= failed 0) (> (string-length last-status) 0)) (set-status! last-status))]
     [else
      (set-status! (string-append "connect.hx: ran "
                                  (to-string ran)
@@ -493,82 +639,65 @@
           found)
         cached)))
 
-;; Run REQ and append its response. Returns the status line on success, or
-;; #false on failure -- which is what the caller counts.
-(define (execute-request req executor vars)
+;; Render a finished request. Returns the status line on success, or #false on
+;; failure -- which is what the caller counts.
+(define (render-result req executor exit stdout stderr elapsed)
   (if (equal? executor "buf")
-      (execute-with-buf req vars)
-      (execute-with-curl req)))
+      (render-buf-result req exit stdout stderr elapsed)
+      (render-curl-result req exit stdout stderr elapsed)))
+
+(define (timed-out? exit) (equal? exit async-timeout-exit-code))
+
+(define (timeout-message)
+  (string-append "connect.hx: timed out after "
+                 (to-string (/ (state-ref 'timeout-ms) 1000))
+                 "s"))
 
 ;; buf reports failure on stderr as `Failure: <message>` with a non-zero exit,
 ;; and much of what it catches never reaches the network -- an unknown field or
 ;; a method absent from the schema is rejected client-side. There is therefore
 ;; no HTTP status to show, and a failure is a real failure rather than curl's
 ;; "a non-2xx is still a response".
-(define (execute-with-buf req vars)
-  (let* ([schema (let ([declared (assoc "schema" vars)]) (if declared (cdr declared) #false))]
-         [started (instant/now)]
-         [result (run-argv "buf"
-                           (buf-curl-argv (request-url req)
-                                          (request-headers req)
-                                          (request-body req)
-                                          schema)
-                           (hash 'timeout-ms (state-ref 'timeout-ms)))]
-         [elapsed (duration->millis (instant/elapsed started))])
-    (cond
-      [(hash-ref result 'timed-out)
-       (set-error! (string-append "connect.hx: buf timed out after "
-                                  (to-string (/ (state-ref 'timeout-ms) 1000))
-                                  "s"))
-       #false]
-      [(not (hash-ref result 'ok))
-       (let ([message (trim (hash-ref result 'stderr))])
-         (append-response! (format-buf-response req message elapsed (next-index!) #false))
-         (set-error! (string-append "connect.hx: " (first-line message)))
-         #false)]
-      [else
-       (append-response!
-        (format-buf-response req (trim (hash-ref result 'stdout)) elapsed (next-index!) #true))
+(define (render-buf-result req exit stdout stderr elapsed)
+  (cond
+    [(timed-out? exit) (set-error! (timeout-message)) #false]
+    [(not (equal? exit 0))
+     (let ([message (trim stderr)])
+       (append-response! (format-buf-response req message elapsed (next-index!) #false))
+       (set-error! (string-append "connect.hx: " (first-line message)))
+       #false)]
+    [else
+     (append-response! (format-buf-response req (trim stdout) elapsed (next-index!) #true))
+     (string-append "connect.hx: "
+                    (url->method-ref (request-url req))
+                    " ok in "
+                    (to-string elapsed)
+                    "ms")]))
+
+(define (render-curl-result req exit stdout stderr elapsed)
+  (cond
+    [(timed-out? exit) (set-error! (timeout-message)) #false]
+    ;; A non-2xx is NOT a failure here -- curl exits 0 and the body carries the
+    ;; Connect error. A non-zero exit means curl itself failed: DNS, connection
+    ;; refused, TLS.
+    [(not (equal? exit 0))
+     (set-error! (string-append "connect.hx: curl failed (exit "
+                                (to-string exit)
+                                "): "
+                                (trim stderr)))
+     #false]
+    [else
+     (let* ([split (split-headers-body stdout)]
+            [headers (car split)]
+            [body (cdr split)])
+       (append-response! (format-response req headers body elapsed (next-index!)))
        (string-append "connect.hx: "
                       (url->method-ref (request-url req))
-                      " ok in "
+                      " "
+                      (trim (car (split-many headers "\n")))
+                      " in "
                       (to-string elapsed)
-                      "ms")])))
-
-(define (execute-with-curl req)
-  (let* ([started (instant/now)]
-         [result (run-argv "curl"
-                           (request->curl-argv req)
-                           (hash 'timeout-ms (state-ref 'timeout-ms)))]
-         [elapsed (duration->millis (instant/elapsed started))])
-    (cond
-      [(hash-ref result 'timed-out)
-       (set-error! (string-append "connect.hx: timed out after "
-                                  (to-string (/ (state-ref 'timeout-ms) 1000))
-                                  "s"))
-       #false]
-      ;; A non-2xx is NOT a failure here -- curl exits 0 and the body carries
-      ;; the Connect error. A non-zero exit means curl itself failed: DNS,
-      ;; connection refused, TLS.
-      [(not (hash-ref result 'ok))
-       (set-error! (string-append "connect.hx: curl failed (exit "
-                                  (to-string (hash-ref result 'exit))
-                                  "): "
-                                  (trim (hash-ref result 'stderr))))
-       #false]
-      [else
-       (let* ([split (split-headers-body (hash-ref result 'stdout))]
-              [headers (car split)]
-              [body (cdr split)])
-         (append-response!
-          (format-response req headers body elapsed (next-index!)))
-         (string-append "connect.hx: "
-                        (url->method-ref (request-url req))
-                        " "
-                        (trim (car (split-many headers "\n")))
-                        " in "
-                        (to-string elapsed)
-                        "ms"))])))
+                      "ms"))]))
 
 ;;@doc
 ;; Empty the *connect* buffer.
