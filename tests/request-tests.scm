@@ -465,3 +465,43 @@
         #false)
 
 (displayln "all scaffolding tests passed")
+
+;; ---------------------------------------------------------------------------
+;; Reflection over plaintext
+;; ---------------------------------------------------------------------------
+
+;; buf refuses reflection on an http:// URL without this: there is no ALPN to
+;; negotiate HTTP/2 over plain text, and reflection needs HTTP/2.
+(check! "http with no schema forces h2c"
+        (if (member "--http2-prior-knowledge" (buf-curl-argv "http://localhost:5000/api/p.S/M" '() "{}" #false))
+            #true
+            #false)
+        #true)
+
+(check! "https does not need forcing"
+        (member "--http2-prior-knowledge" (buf-curl-argv "https://x/p.S/M" '() "{}" #false))
+        #false)
+
+;; With a schema there is no reflection, and forcing HTTP/2 would break a server
+;; that only speaks HTTP/1.1.
+(check! "a schema suppresses the h2c flag"
+        (member "--http2-prior-knowledge" (buf-curl-argv "http://x/p.S/M" '() "{}" "./proto"))
+        #false)
+
+(check! "listing methods over http forces h2c too"
+        (if (member "--http2-prior-knowledge" (buf-list-methods-argv "http://localhost:5000/api" #false))
+            #true
+            #false)
+        #true)
+
+(check! "listing with a schema does not"
+        (member "--http2-prior-knowledge" (buf-list-methods-argv "http://x" "./proto"))
+        #false)
+
+;; A base URL with a path prefix must keep it -- the service path is appended,
+;; not substituted.
+(check! "connect-url keeps a path prefix"
+        (connect-url "http://localhost:5000/api" "fishing.v1.Svc" "Method")
+        "http://localhost:5000/api/fishing.v1.Svc/Method")
+
+(displayln "all plaintext reflection tests passed")

@@ -84,14 +84,27 @@
 ;; itself, and `Connect-Protocol-Version` given twice is a 400.
 (define (buf-curl-argv url headers body schema)
   (append (list "curl" "--protocol" "connect")
-          (if (and (string? schema) (> (string-length schema) 0))
-              (list "--schema" schema)
-              '())
+          (schema-flags url schema)
           (flatten-headers (filter (lambda (h) (not (connect-header? (car h)))) headers))
           (if (and (string? body) (> (string-length body) 0))
               (list "-d" body)
               '())
           (list url)))
+
+;; `--schema` when we have one, and otherwise the flag reflection needs.
+;;
+;; Reflection runs over HTTP/2, and an http:// URL gives buf no ALPN to
+;; negotiate it, so it refuses: "--reflect cannot be used with plain-text URLs
+;; (http) unless --http2-prior-knowledge flag is set". Forcing h2c is therefore
+;; required for reflection against a local server -- and deliberately NOT done
+;; when a schema is given, since no reflection happens then and forcing HTTP/2
+;; would break a server that only speaks HTTP/1.1.
+(define (schema-flags url schema)
+  (if (and (string? schema) (> (string-length schema) 0))
+      (list "--schema" schema)
+      (if (plaintext-url? url) (list "--http2-prior-knowledge") '())))
+
+(define (plaintext-url? url) (starts-with? url "http://"))
 
 (define (connect-header? name)
   (let ([lowered (string-downcase name)])
@@ -503,11 +516,7 @@
 
 ;; Argv for listing a server's methods. Reflection unless a schema is given.
 (define (buf-list-methods-argv url schema)
-  (append (list "curl" "--list-methods")
-          (if (and (string? schema) (> (string-length schema) 0))
-              (list "--schema" schema)
-              '())
-          (list url)))
+  (append (list "curl" "--list-methods") (schema-flags url schema) (list url)))
 
 ;; ---------------------------------------------------------------------------
 ;; Scaffolding

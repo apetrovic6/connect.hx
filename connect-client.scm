@@ -597,7 +597,11 @@
 (define (insert-request-stub! base method)
   (let ([body (scaffold-body base method)])
     (helix.static.insert_string (string-append ">> " method "\n" body "\n"))
-    (set-status! (string-append "connect.hx: inserted " method))))
+    ;; Say when the body is empty because the schema could not be read, rather
+    ;; than leaving a bare {} to look like the message really has no fields.
+    (set-status! (string-append "connect.hx: inserted "
+                               method
+                               (if (equal? body "{}") " (no schema -- empty body)" "")))))
 
 ;; The skeleton body for METHOD, or "{}" when the schema cannot be reached.
 ;;
