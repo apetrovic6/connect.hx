@@ -481,9 +481,13 @@ the blocking version proves annoying in practice.
   The picker is our own (connect-picker.scm): helix registers two pickers for
   steel and both open the selection as a file path, and `prompt` is built with
   no completion function, so neither can pick an arbitrary string.
-- **5. Request scaffolding.** Descriptor set to skeleton body. The biggest
-  single ergonomic win, and the point at which this stops being "an http client
-  that knows a URL shape".
+- **5. Request scaffolding.** *(done)* Choosing a method in the picker inserts a
+  body with every field at its protojson zero, not `{}`. grpcurl does the
+  descriptor work -- `describe <Service.Method>` names the input message and
+  `-msg-template describe <Message>` prints the skeleton. buf cannot: `buf build`
+  reads dirs, modules and images, never reflection. Any failure falls back to
+  `{}` silently, since scaffolding is a convenience on top of a picker that has
+  already done its job.
 
 Milestones 1 and 2 need no protobuf tooling at all. That ordering is
 deliberate: it produces something usable before any schema work begins, and

@@ -44,6 +44,10 @@ be written above the body, with or without a blank line between.
 - `curl` -- the default executor, and the only hard requirement.
 - `buf` -- optional. Enables the schema-aware executor: request validation,
   decoded streaming responses, readable error details.
+- `grpcurl` -- optional. Scaffolds a request body from the schema when you pick
+  a method; without it you get `{}`. Needs gRPC reflection on the server.
+
+`:connect-doctor` reports which are present.
 
 ## Development
 
@@ -145,7 +149,7 @@ serve reflection. `:connect-doctor` reports which executors are available.
 | `:connect-exec-selection` | execute every request the selection touches |
 | `:connect-exec-buffer` | execute every request in the buffer, top to bottom |
 | `:connect-set-timeout [seconds]` | set or show the request timeout (default 30s) |
-| `:connect-methods` | pick a method `@base` serves; inserts a `>>` stub |
+| `:connect-methods` | pick a method `@base` serves; inserts a scaffolded request |
 | `:connect-clear` | empty the `*connect*` log and reset entry numbering |
 
 Responses are appended and numbered, so successive calls can be compared; use

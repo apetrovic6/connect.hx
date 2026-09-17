@@ -508,3 +508,78 @@
               (list "--schema" schema)
               '())
           (list url)))
+
+;; ---------------------------------------------------------------------------
+;; Scaffolding
+;;
+;; grpcurl does the descriptor work: `describe <Service.Method>` names the input
+;; message, and `-msg-template describe <Message>` prints a skeleton with every
+;; field at its protojson zero -- int64 as a string, enums by name, nested
+;; messages expanded, repeated as arrays, maps as objects. Reproducing that from
+;; a FileDescriptorSet would be a lot of Scheme for a worse result.
+;; ---------------------------------------------------------------------------
+
+(provide url->grpc-address
+         url-plaintext?
+         describe-input-type
+         extract-message-template
+         grpcurl-describe-argv)
+
+;; A base URL to the host:port grpcurl wants. The port is explicit because
+;; grpcurl has no scheme to infer it from.
+(define (url->grpc-address url)
+  (let* ([stripped (strip-scheme url)]
+         [host (car (split-many stripped "/"))])
+    (if (string-contains? host ":")
+        host
+        (string-append host (if (starts-with? url "http://") ":80" ":443")))))
+
+;; http:// means no TLS, which grpcurl needs told explicitly.
+(define (url-plaintext? url) (starts-with? url "http://"))
+
+(define (strip-scheme url)
+  (cond
+    [(starts-with? url "https://") (substring url 8 (string-length url))]
+    [(starts-with? url "http://") (substring url 7 (string-length url))]
+    [else url]))
+
+;; Pull the input message out of `rpc Say ( .pkg.SayRequest ) returns ( ... )`.
+;; The leading dot is protobuf's fully-qualified marker and grpcurl will not
+;; accept a symbol that still has it.
+(define (describe-input-type output)
+  (let ([open (find-char output #\()])
+    (if (not open)
+        #false
+        (let ([close (find-char-from output #\) (+ open 1))])
+          (if (not close)
+              #false
+              (let ([inner (trim (substring output (+ open 1) close))])
+                (if (= (string-length inner) 0)
+                    #false
+                    (if (starts-with? inner ".") (substring inner 1 (string-length inner)) inner))))))))
+
+;; Everything after grpcurl's "Message template:" line.
+(define (extract-message-template output)
+  (let ([lines (split-many output "\n")])
+    (let loop ([ls lines])
+      (cond
+        [(null? ls) #false]
+        [(starts-with? (trim (car ls)) "Message template:")
+         (let ([body (trim (string-join (cdr ls) "\n"))])
+           (if (= (string-length body) 0) #false body))]
+        [else (loop (cdr ls))]))))
+
+(define (find-char s c) (find-char-from s c 0))
+
+(define (find-char-from s c start)
+  (let loop ([i start])
+    (cond
+      [(>= i (string-length s)) #false]
+      [(char=? (string-ref s i) c) i]
+      [else (loop (+ i 1))])))
+
+;; `grpcurl [-plaintext] [-msg-template] <addr> describe <symbol>`.
+(define (grpcurl-describe-argv url symbol template?)
+  (append (if (url-plaintext? url) (list "-plaintext") '())
+          (if template? (list "-msg-template") '())
+          (list (url->grpc-address url) "describe" symbol)))

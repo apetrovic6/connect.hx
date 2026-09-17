@@ -76,15 +76,15 @@
 ;; request bodies against the schema and decodes streaming responses.
 (define (connect-doctor)
   (let ([curl-version (binary-version "curl" "curl --version | head -1 | cut -d' ' -f2")]
-        [buf-version (binary-version "buf" "buf --version 2>&1 | head -1")])
+        [buf-version (binary-version "buf" "buf --version 2>&1 | head -1")]
+        [grpcurl-version (binary-version "grpcurl" "grpcurl -version 2>&1 | cut -d' ' -f2")])
     (if curl-version
-        (set-status!
-         (string-append "connect.hx: curl "
-                        curl-version
-                        " | buf "
-                        (if buf-version
-                            buf-version
-                            "not found (schema features unavailable)")))
+        (set-status! (string-append "connect.hx: curl "
+                                    curl-version
+                                    " | buf "
+                                    (if buf-version buf-version "missing")
+                                    " | grpcurl "
+                                    (if grpcurl-version grpcurl-version "missing")))
         (set-error! "connect.hx: curl not found on PATH -- no executor available"))))
 
 ;; ---------------------------------------------------------------------------
@@ -94,7 +94,7 @@
 ;; A box rather than a struct: the only mutable state is the response buffer's
 ;; doc-id and the timeout, and a box keeps the update sites obvious.
 (define client-state
-  (box (hash 'buffer-id #false 'timeout-ms 30000 'request-count 0 'buf-available 'unknown)))
+  (box (hash 'buffer-id #false 'timeout-ms 30000 'request-count 0 'buf-available 'unknown 'grpcurl-available 'unknown)))
 
 (define (state-ref key) (hash-ref (unbox client-state) key))
 
@@ -582,7 +582,7 @@
        (let ([methods (method-refs (split-many (hash-ref result 'stdout) "\n"))])
          (if (null? methods)
              (set-error! (string-append "connect.hx: no methods reported by " base))
-             (pick methods insert-request-stub!)))])))
+             (pick methods (lambda (method) (insert-request-stub! base method)))))])))
 
 ;; Every `pkg.Service/Method` line buf listed, flattened back out of the
 ;; grouping -- the picker wants one flat list of candidates to match against.
@@ -592,8 +592,53 @@
                              (map (lambda (m) (string-append (car entry) "/" m)) (cdr entry))))
              (into-list)))
 
-;; Insert a ready-to-run request at the cursor rather than just the name: what
-;; you want after choosing a method is a request that calls it.
-(define (insert-request-stub! method)
-  (helix.static.insert_string (string-append ">> " method "\n{}\n"))
-  (set-status! (string-append "connect.hx: inserted " method)))
+;; Insert a ready-to-run request at the cursor: the method, and a body scaffolded
+;; from the schema when one can be had.
+(define (insert-request-stub! base method)
+  (let ([body (scaffold-body base method)])
+    (helix.static.insert_string (string-append ">> " method "\n" body "\n"))
+    (set-status! (string-append "connect.hx: inserted " method))))
+
+;; The skeleton body for METHOD, or "{}" when the schema cannot be reached.
+;;
+;; Two grpcurl calls: `describe <Service.Method>` names the input message, then
+;; `-msg-template describe <Message>` prints it with every field at its protojson
+;; zero. grpcurl rather than buf because buf build cannot read reflection, and
+;; reproducing protojson zeros from a descriptor set would be a lot of Scheme
+;; for a worse answer.
+;;
+;; Every failure falls back to "{}" in silence. Scaffolding is a convenience on
+;; top of a picker that has already done its job; a server with no gRPC
+;; reflection should cost you the skeleton, not the insert.
+(define (scaffold-body base method)
+  (if (not (grpcurl-available?))
+      "{}"
+      (let ([described (grpcurl-describe base (method->symbol method) #false)])
+        (if (not described)
+            "{}"
+            (let ([input (describe-input-type described)])
+              (if (not input)
+                  "{}"
+                  (let ([template (grpcurl-describe base input #true)])
+                    (if template
+                        (or (extract-message-template template) "{}")
+                        "{}"))))))))
+
+;; grpcurl wants `pkg.Service.Method`, the picker deals in `pkg.Service/Method`.
+(define (method->symbol method)
+  (let ([parsed (parse-method-ref method)])
+    (if parsed (string-append (car parsed) "." (cdr parsed)) method)))
+
+(define (grpcurl-describe base symbol template?)
+  (let ([result (run-argv "grpcurl"
+                          (grpcurl-describe-argv base symbol template?)
+                          (hash 'timeout-ms (state-ref 'timeout-ms)))])
+    (if (hash-ref result 'ok) (hash-ref result 'stdout) #false)))
+
+(define (grpcurl-available?)
+  (let ([cached (state-ref 'grpcurl-available)])
+    (if (equal? cached 'unknown)
+        (let ([found (binary-available? "grpcurl")])
+          (state-set! 'grpcurl-available found)
+          found)
+        cached)))

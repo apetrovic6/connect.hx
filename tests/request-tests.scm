@@ -404,3 +404,64 @@
         #false)
 
 (displayln "all method discovery tests passed")
+
+;; ---------------------------------------------------------------------------
+;; Scaffolding
+;; ---------------------------------------------------------------------------
+
+;; grpcurl has no scheme to infer a port from, so it is always explicit.
+(check! "https defaults to port 443"
+        (url->grpc-address "https://demo.connectrpc.com")
+        "demo.connectrpc.com:443")
+
+(check! "http defaults to port 80"
+        (url->grpc-address "http://example.com")
+        "example.com:80")
+
+(check! "an explicit port is kept"
+        (url->grpc-address "http://localhost:8080")
+        "localhost:8080")
+
+(check! "a path is dropped"
+        (url->grpc-address "https://example.com/api")
+        "example.com:443")
+
+(check! "http means plaintext" (url-plaintext? "http://localhost:8080") #true)
+(check! "https does not" (url-plaintext? "https://x") #false)
+
+;; The leading dot is protobuf's fully-qualified marker; grpcurl rejects a
+;; symbol that still carries it.
+(check! "describe-input-type strips the leading dot"
+        (describe-input-type
+         "rpc Say ( .connectrpc.eliza.v1.SayRequest ) returns ( .connectrpc.eliza.v1.SayResponse )")
+        "connectrpc.eliza.v1.SayRequest")
+
+(check! "describe-input-type handles a streaming marker"
+        (describe-input-type "rpc Introduce ( .pkg.IntroduceRequest ) returns ( stream .pkg.Reply )")
+        "pkg.IntroduceRequest")
+
+(check! "describe-input-type is #false without parens"
+        (describe-input-type "not a method description")
+        #false)
+
+(check! "extract-message-template takes everything after the marker"
+        (extract-message-template "pkg.M is a message:\nmessage M {}\n\nMessage template:\n{\n  \"a\": \"\"\n}")
+        "{\n  \"a\": \"\"\n}")
+
+(check! "extract-message-template is #false when absent"
+        (extract-message-template "pkg.M is a message:")
+        #false)
+
+(check! "grpcurl-describe-argv adds -plaintext for http"
+        (if (member "-plaintext" (grpcurl-describe-argv "http://x" "pkg.M" #false)) #true #false)
+        #true)
+
+(check! "grpcurl-describe-argv omits -plaintext for https"
+        (member "-plaintext" (grpcurl-describe-argv "https://x" "pkg.M" #false))
+        #false)
+
+(check! "grpcurl-describe-argv asks for a template only when wanted"
+        (member "-msg-template" (grpcurl-describe-argv "https://x" "pkg.M" #false))
+        #false)
+
+(displayln "all scaffolding tests passed")
