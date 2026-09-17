@@ -103,8 +103,7 @@ Responses are appended and numbered, so successive calls can be compared; use
 
 MIT. See [LICENSE](./LICENSE).
 
-The `.http` syntax support builds on [http2curl](https://github.com/waddie/http2curl.scm)
-and process execution on [run-command](https://github.com/waddie/run-command.scm),
-both MIT, both by Tom Waddington. The design owes a lot to
+Process execution builds on [run-command](https://github.com/waddie/run-command.scm),
+MIT, by Tom Waddington. The design owes a lot to
 [http.hx](https://github.com/waddie/http.hx), which is AGPL-3.0-or-later; no
 code from it is used here.

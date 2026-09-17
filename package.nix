@@ -2,7 +2,6 @@
   lib,
   buildHelixPlugin,
   run-command,
-  http2curl,
 }:
 buildHelixPlugin {
   pname = "connect.hx";
@@ -17,13 +16,9 @@ buildHelixPlugin {
     fileset = lib.fileset.fileFilter (file: file.hasExt "scm") ./.;
   };
 
-  # Both MIT, both standalone: run-command spawns processes and captures
-  # output without deadlocking or leaving zombies; http2curl parses the
-  # vscode-restclient `.http` syntax this format is a superset of.
-  pluginDependencies = [
-    run-command
-    http2curl
-  ];
+  # run-command spawns processes and captures output without deadlocking or
+  # leaving zombies. MIT, standalone.
+  pluginDependencies = [run-command];
 
   doSteelCheck = true;
 

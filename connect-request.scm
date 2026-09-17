@@ -100,7 +100,7 @@
 ;;
 ;; The format is a superset of the vscode-restclient `.http` syntax: requests
 ;; separated by `###`, `@name = value` declarations, `{{name}}` interpolation.
-;; Parsing it here rather than delegating to http2curl because the Connect
+;; Parsing it here rather than delegating to waddie's http2curl because the Connect
 ;; layer needs the pieces individually (the method reference in particular),
 ;; while http2curl only exposes a whole-input string->curl-string conversion.
 ;; ---------------------------------------------------------------------------

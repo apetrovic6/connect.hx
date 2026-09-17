@@ -235,9 +235,10 @@ Items 1-4 are the plan. Items 5-7 are explicitly parked.
 ## 6. File format
 
 A superset of the vscode-restclient `.http` syntax, so plain HTTP and Connect
-calls coexist in one buffer and the existing conventions carry over. `http2curl`
-(MIT) already parses the base syntax including `@variable` declarations and
-`{{interpolation}}`; the Connect layer is additive.
+calls coexist in one buffer and the existing conventions carry over. The parser
+is our own (connect-request.scm): waddie's http2curl reads the same syntax but
+only exposes a whole-input string->curl-string conversion, and the Connect layer
+needs the pieces individually.
 
 ```http
 @base = http://localhost:8080

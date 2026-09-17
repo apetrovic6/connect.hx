@@ -5,10 +5,9 @@
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-parts.url = "github:hercules-ci/flake-parts";
     treefmt-nix.url = "github:numtide/treefmt-nix";
-
-    # Provides `helixPlugins`, which carries both the cog builder
-    # (`buildHelixPlugin`) and the two MIT cogs this plugin depends on
-    # (`run-command`, `http2curl`). Nothing else from this flake is used --
+    # Provides `helixPlugins`, carrying both the cog builder
+    # (`buildHelixPlugin`) and the MIT cog this plugin depends on
+    # (`run-command`). Nothing else from this flake is used --
     # its NixOS/home-manager modules would pull in a second helix build.
     helix-plugins.url = "github:maxschipper/helix-plugins-nix";
   };
@@ -75,7 +74,6 @@
             mkdir -p "$STEEL_HOME/cogs"
             ln -sfn "$PWD" "$STEEL_HOME/cogs/connect.hx"
             ln -sfn ${helixPlugins.run-command} "$STEEL_HOME/cogs/run-command"
-            ln -sfn ${helixPlugins.http2curl} "$STEEL_HOME/cogs/http2curl"
             echo "connect.hx dev shell -- STEEL_HOME=$STEEL_HOME"
           '';
         };
