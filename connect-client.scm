@@ -304,14 +304,6 @@
 
 ;;@doc
 ;; Execute the request under the cursor and show the response in *connect*.
-;;
-;; The request is the `###`-delimited block containing the cursor -- no
-;; selection required, unlike http.hx. `@name = value` declarations are read
-;; from the whole buffer, so a `@base` at the top applies throughout.
-;;
-;; This blocks the editor thread for the duration of the request. Against a
-;; local service that is imperceptible; the timeout (default 30s) bounds the
-;; damage against one that hangs. See DESIGN.md §8.
 (define (connect-exec)
   (let* ([doc-id (editor->doc-id (editor-focus))]
          [text (text.rope->string (editor->text doc-id))]
@@ -357,10 +349,6 @@
 
 ;;@doc
 ;; Empty the *connect* buffer.
-;;
-;; Responses accumulate, so this is the reset. The request counter goes back to
-;; zero with the log it numbers -- leaving it running would label the first
-;; entry of an empty buffer "# 7", which reads like something is missing.
 (define (connect-clear)
   (let ([doc-id (ensure-response-buffer)]
         [origin (editor-focus)])
@@ -401,6 +389,5 @@
   (enqueue-thread-local-callback
    (lambda ()
      (keymap (global)
-             (normal (space (c (c ":connect-exec")
-                               (d ":connect-doctor")
+             (normal (space (C (c ":connect-exec")
                                (x ":connect-clear"))))))))
