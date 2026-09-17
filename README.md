@@ -58,18 +58,23 @@ module, or the commands will not be registered:
 (require "connect.hx/connect-client.scm")
 ```
 
-Optionally bind `:connect-exec` to `space H`:
+Optionally bind the commands under `space H`:
 
 ```scheme
 (connect-install-keybindings!)
 ```
 
-The binding is scoped to `.connect` and `.http` files -- helix selects a
-keymap by the focused file's extension -- so `space H` stays free everywhere
-else. It is bound as a leaf so the space menu actually lists it; a submenu has
-no name and helix renders no row for one. Each extension map inherits a copy of
-the global keymap, which keeps
-the rest of your bindings working inside those files.
+`space H c` executes, `space H x` clears. The bindings are scoped to `.connect`
+and `.http` files -- helix selects a keymap by the focused file's extension --
+so `space H` stays free everywhere else. Each extension map inherits a copy of
+the global keymap, which keeps the rest of your bindings working inside those
+files.
+
+The two entries are labelled once the submenu is open, but the `H` row in the
+parent space menu is blank: a submenu's description is its `KeyTrieNode` name,
+which is private and `#[serde(skip)]`, and the steel keymap API has no setter
+for it. Only helix's own `keymap!` macro names a node, which is why `space w`
+reads "Window" and yours cannot.
 
 Binding from steel rather than `config.toml` is also what gets you hints in the
 keymap popup: that path attaches each command's `@doc` string. A steel command

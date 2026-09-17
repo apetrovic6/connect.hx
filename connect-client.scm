@@ -369,10 +369,13 @@
 (define binding-extensions (list "connect" "http"))
 
 ;;@doc
-;; Bind :connect-exec to `space H` in .connect and .http files.
+;; Bind the connect.hx commands under `space H` in .connect and .http files.
 ;;
-;; A leaf, not a submenu: a user-defined submenu has no name and helix renders
-;; no row for it, so a grouped binding works but is never listed in the menu.
+;; `space H c` executes, `space H x` clears. Both rows are labelled from their
+;; @doc once the submenu is open; the `H` row in the parent space menu is blank,
+;; which is not fixable -- a submenu's description is its KeyTrieNode name, that
+;; field is private and #[serde(skip)], and the whole steel keymap API has no
+;; setter for it. Only rust's keymap! macro names a node.
 ;;
 ;; The inherit-from is load-bearing. Helix falls back to the global keymap only
 ;; on a miss, and a map holding just `space H` would match `space` and strand
@@ -384,4 +387,5 @@
 
 (define (install-bindings-for-extension! ext)
   (keymap (extension ext (inherit-from (deep-copy-global-keybindings)))
-          (normal (space (H ":connect-exec")))))
+          (normal (space (H (c ":connect-exec")
+                            (x ":connect-clear"))))))
