@@ -137,19 +137,12 @@
             (editor-set-focus! origin)
             new-id)))))
 
-;; Add TEXT to the *connect* buffer as the NEWEST entry, at the top.
+;; Append TEXT to the *connect* buffer as the newest entry, at the bottom.
 ;;
-;; Newest-first rather than chronological, because the entry you just ran has to
-;; be the one you can see. Appending put it at the bottom and left the view at
-;; the bottom with it, which is fine until an entry is taller than the pane --
-;; then its own header, the line naming which call it was, scrolls off the top
-;; and you are looking at an unlabelled body.
-;;
-;; Scrolling to the start of the new entry instead would keep chronological
-;; order, and there is no way to do it: `goto_line` is a static command driven by
-;; cx.count, which steel cannot set, and the typed `:goto` panics helix when
-;; called from here (see below). Putting the entry at the top needs no line
-;; arithmetic at all.
+;; Chronological, which is what you want when comparing a sequence of calls.
+;; Entries were briefly newest-first to work around a header that would not stay
+;; visible -- that turned out to be the scopeline plugin clipping the top row of
+;; every pane, not anything here.
 ;;
 ;; The buffer is rewritten whole rather than inserted into. `select_all` +
 ;; `delete_selection` is the only sequence found that survives the first write
@@ -172,25 +165,9 @@
           (editor-set-focus! view)
           (helix.static.select_all)
           (helix.static.delete_selection)
-          (helix.static.insert_string (string-append text existing))
-          ;; Back to the top, via the SELECTION rather than a goto.
-          ;;
-          ;; insert_string leaves the cursor at the end of what it wrote, and
-          ;; the view scrolls with it. Flipping a select_all puts the head at 0 so
-          ;; collapse_selection lands there.
-          ;;
-          ;; KNOWN BUG: this fixes the cursor but not the scroll. The pane keeps
-          ;; the offset it took when the cursor was at the end of the insert, so
-          ;; a response taller than the pane hides its own header until you
-          ;; focus the pane, at which point Editor::focus -> ensure_cursor_in_view
-          ;; snaps it to the top. Six fixes failed: goto_file_start inline and
-          ;; deferred, align_view_top, a delayed focus restore so a frame renders
-          ;; while focused, and focusing away and back to re-trigger
-          ;; ensure_cursor_in_view. The status line names the method as a
-          ;; stopgap.
-          (helix.static.select_all)
-          (helix.static.flip_selections)
-          (helix.static.collapse_selection)
+          (helix.static.insert_string (string-append existing text))
+          (helix.static.goto_file_end)
+          (helix.static.align_view_bottom)
           (editor-set-focus! origin))))))
 
 ;; ---------------------------------------------------------------------------
