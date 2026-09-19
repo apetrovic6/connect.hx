@@ -413,13 +413,10 @@ tested, still panics. Note the typed `:goto` panics here even though the static
 commands around it are fine, so view positioning after a write is limited to
 `helix/static.scm` commands.
 
-Entries are newest-first, and the view is reset to the top after each run, so the
-entry you just ran always starts at line 1 with its header visible. Appending
-instead left the view at the bottom, and an entry taller than the pane scrolled
-its own header -- the line naming which call it was -- off the top. Keeping
-chronological order and scrolling to the new entry is not possible: `goto_line`
-is a static command driven by cx.count, which steel cannot set, and the typed
-`:goto` panics from here.
+Entries are appended in the order the calls were made, newest at the bottom.
+They were briefly newest-first, to work around a header that would not stay
+visible -- which turned out to be the scopeline plugin clipping the top row of
+every pane, not anything here. See §11.
 The rendered shape, as implemented:
 
 ```markdown
@@ -537,18 +534,14 @@ the schema work is then informed by actual use rather than speculation.
 
 ## 11. Known bugs and limits
 
-- **The response pane does not scroll back to the top.** The newest entry is at
-  line 1 and the cursor is on it, but a pane that is not focused when the frame
-  renders keeps the offset it took when the cursor was at the end of the insert
-  -- so a response taller than the pane hides its own header. Focusing the pane
-  snaps it (`Editor::focus` calls `ensure_cursor_in_view`). Six fixes failed:
-  `goto_file_start` inline and deferred, `select_all` + `flip_selections` +
-  `collapse_selection`, `align_view_top`, a delayed focus restore so a frame
-  renders while focused, and focusing away and back. The steel bridge exposes
-  nothing for view offsets -- every `register_fn` matching view/offset/scroll is
-  `lsp-client-offset-encoding` -- so the only untried route is leaving focus in
-  the response pane, which does work but moves the cursor out of the request
-  buffer. The status line names the method as a stopgap.
+- **A missing response header is probably not this plugin.** It was reported as
+  one and was not: the scopeline plugin calls `set-editor-clip-top!` with 1
+  unconditionally, because its `always-reserved?` defaults to `#t`, which takes
+  the top row off EVERY pane whether or not it has a scope to show. Line 1 was
+  rendered and then clipped. `(scopeline-configure! #:always-reserved? #f)`
+  fixes it, and `#:position 'bottom-left` fixes it outright. Six scroll fixes
+  were attempted before the cause was found; if a first line ever goes missing
+  again, check what else is clipping the viewport before touching this.
 - **Method listing, scaffolding and the picker preview still block.** Request
   execution does not (see §8), but `:connect-methods` shells out to buf, and
   each picker preview costs two grpcurl calls. Short against a local server;
