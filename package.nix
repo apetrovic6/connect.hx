@@ -18,7 +18,16 @@ buildHelixPlugin {
 
   # run-command spawns processes and captures output without deadlocking or
   # leaving zombies. MIT, standalone.
-  pluginDependencies = [run-command];
+  #
+  # Under passthru, not as a top-level argument: buildHelixPlugin changed where
+  # it reads this. It used to take `pluginDependencies` as an argument and copy
+  # it into passthru; it now reads `args.passthru.pluginDependencies` and
+  # defaults to []. A top-level one is silently ignored, so the cog installs
+  # without its dependency and the first sign is helix refusing to start --
+  # `(require "run-command/run-command.scm")` fails at load with "No such file
+  # or directory", because the consuming configuration walks passthru to decide
+  # what to put in STEEL_HOME.
+  passthru.pluginDependencies = [run-command];
 
   doSteelCheck = true;
 
